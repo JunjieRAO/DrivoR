@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 
-from typing import List
+from typing import List, Sequence
 
 from nuplan.common.actor_state.state_representation import StateSE2, TimePoint
 from nuplan.common.actor_state.ego_state import EgoState
@@ -138,3 +138,17 @@ def pdm_score(
         driving_direction_compliance,
         score,
     )
+
+
+def pdm_score_proposals(
+    metric_cache: MetricCache,
+    model_trajectories: Sequence[Trajectory],
+    future_sampling: TrajectorySampling,
+    simulator: PDMSimulator,
+    scorer: PDMScorer,
+) -> List[PDMResults]:
+    """Score candidates independently to preserve NAVSIM's progress normalization."""
+    return [
+        pdm_score(metric_cache, trajectory, future_sampling, simulator, scorer)
+        for trajectory in model_trajectories
+    ]

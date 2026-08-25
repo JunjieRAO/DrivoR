@@ -17,3 +17,4 @@ defaults:
   - override train_test_split: navtest
 
 metric_cache_path: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache # path to metric cache
+evaluate_all_proposals: false # report oracle best score across every model proposal

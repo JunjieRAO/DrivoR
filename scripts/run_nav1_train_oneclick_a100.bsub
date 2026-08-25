@@ -1,0 +1,21 @@
+#!/bin/bash -l
+
+## Scheduler parameters ##
+
+#BSUB -J "drivoR_nav1_train_a100"                        # job name
+#BSUB -o drivoR_nav1_train_a100.%J.stdout                # optional: Have output written to specific file
+#BSUB -e drivoR_nav1_train_a100.%J.stderr                # optional: Have errors written to specific file
+#BSUB -q batch_a100                      # TODO: verify exact A100 queue name on your cluster with `bqueues`
+#BSUB -W 10:00                           # wallclock 20h - fits backfill before the 7/7 06:00 reservation; long enough for several epochs
+#BSUB -n 16                              # CPU cores = fair share of A100 node (64 core / 8 GPU = 8/GPU x 4 GPU); 4 x (7 workers + 1 main) = 32
+#BSUB -M 16000                           # memory per CPU core in Mbyte
+#BSUB -R "span[hosts=1]"                 # keep all cores on a single host (required for local dataloader workers)
+#BSUB -gpu "num=2"                       # 1x A100
+#BSUB -P BH-000425-08-06                 # optional: fill in cluster project
+
+## Job parameters ##
+
+export DRIVOR_NUM_WORKERS=8              # dataloader workers per GPU (increased from 11 to improve dataloader throughput)
+export BATCH_SIZE=16                      # per-GPU batch size; global batch = 2 GPU x 16 = 32 (same as original 4xA100 baseline)
+export NUM_GPUS=2                        # must match -gpu num above; used for LR scaling (sqrt rule) and LR scheduler T_max
+bash /home/roa7sgh/DrivoR/scripts/run_nav1_train_oneclick.sh

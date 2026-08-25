@@ -1,0 +1,27 @@
+#!/bin/bash -l
+
+## Scheduler parameters ##
+
+#BSUB -J "verify_a100_env"                    # job name
+#BSUB -o verify_a100_env.%J.stdout            # optional: Have output written to specific file
+#BSUB -e verify_a100_env.%J.stderr            # optional: Have errors written to specific file
+#BSUB -q batch_a100                           # queue to use
+#BSUB -W 0:10                                 # wallclock time [hours:]minutes
+#BSUB -n 1                                    # CPU cores
+#BSUB -M 4000                                 # memory per CPU core in Mbyte
+#BSUB -R "span[hosts=1]"                      # keep all cores on a single host
+#BSUB -gpu "num=1"                            # 1 GPU
+
+## Job parameters ##
+
+source /home/roa7sgh/DrivoR/scripts/setup_drivor_env.sh
+
+echo "[INFO] Host: $(hostname)"
+nvidia-smi --query-gpu=name,compute_cap --format=csv
+
+python -c "
+import torch
+x = torch.randn(1000, 1000).cuda()
+y = x @ x
+print('matmul OK, device:', torch.cuda.get_device_name(0))
+"

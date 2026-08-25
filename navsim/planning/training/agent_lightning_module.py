@@ -18,7 +18,7 @@ def _rowwise_isin(tensor_1: torch.Tensor, target_tensor: torch.Tensor) -> torch.
 class AgentLightningModule(pl.LightningModule):
     """Pytorch lightning wrapper for learnable agent."""
 
-    def __init__(self, agent: AbstractAgent, for_viz = False):
+    def __init__(self, agent: AbstractAgent, for_viz=False, export_all_proposals=False):
         """
         Initialise the lightning module wrapper.
         :param agent: agent interface in NAVSIM
@@ -27,6 +27,7 @@ class AgentLightningModule(pl.LightningModule):
         self.agent = agent
         self.checkpoint_file=None
         self.for_viz = for_viz
+        self.export_all_proposals = export_all_proposals
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -130,6 +131,9 @@ class AgentLightningModule(pl.LightningModule):
         with torch.no_grad():
             predictions = self.agent.forward(features)
             poses = predictions["trajectory"]
+            if self.export_all_proposals:
+                proposals = predictions["proposals"]
+                selected_indices = torch.argmax(predictions["pdm_score"], dim=1)
             if self.for_viz:
                 all_proposed_trajectories = predictions["proposal_list"]
                 final_trajectories = predictions["proposals"]
@@ -148,4 +152,9 @@ class AgentLightningModule(pl.LightningModule):
                 }
             else:
                 result[token] = {'trajectory': proposal}
+                if self.export_all_proposals:
+                    result[token]['proposals'] = [
+                        Trajectory(poses) for poses in proposals[index].cpu().numpy()
+                    ]
+                    result[token]['selected_proposal_idx'] = int(selected_indices[index].item())
         return result

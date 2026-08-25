@@ -26,6 +26,11 @@ bash ./download/download_warmup_two_stage.sh
 ViT-S dinoV2 pretrained model can be found in https://huggingface.co/timm/vit_small_patch14_reg4_dinov2.lvd142m/tree/main, please download all files and put them into *./weights/vit_small_patch14_reg4_dinov2.lvd142m*
 
 The model weights are provided in *GitHub Releases*.
+
+Download the official NAVSIM-v1 25-epoch checkpoint (the script verifies the published SHA-256):
+```bash
+bash download/download_nav1_weights.sh
+```
 # Installations 
 ```bash
 conda create -n drivoR python=3.9
@@ -125,6 +130,37 @@ Cache train metrics for pdm score calculation:
 ```bash
 bash scripts/evaluation/run_metric_caching.sh
 ```
+
+For an end-to-end NAVSIM-v1 evaluation that also reports the oracle
+best-of-all-proposal score over all 64 generated trajectories:
+```bash
+# First run: builds the navtest metric cache and evaluates the official checkpoint.
+bash scripts/run_nav1_eval_oneclick.sh
+
+# Later runs can reuse the metric cache.
+SKIP_METRIC_CACHE=1 bash scripts/run_nav1_eval_oneclick.sh /path/to/checkpoint.pth
+```
+
+On an LSF cluster, submit the complete download and evaluation workflow with:
+```bash
+bsub < scripts/run_nav1_eval_best_of_all.bsub
+```
+Adjust the queue, project, wall time, and resource directives at the top of the
+submission script for your cluster. To reuse an existing cache:
+```bash
+SKIP_METRIC_CACHE=1 bsub < scripts/run_nav1_eval_best_of_all.bsub
+```
+
+Results are written below
+`$NAVSIM_EXP_ROOT/ke/<experiment_name>/<timestamp>/`. In the CSV, `score` and
+the unprefixed subscores describe the trajectory selected by DrivoR's learned
+scorer. `best_score`, `best_proposal_idx`, and the other `best_*` columns
+describe the single proposal with the highest ground-truth PDM score in each
+scene. The `average` row reports dataset-level means; best-of-all is an oracle
+upper bound and is not an online model score. Each proposal is scored
+independently to preserve NAVSIM's official progress normalization, so this
+mode performs 64 PDM simulations per scene and is substantially slower than
+standard single-trajectory evaluation.
 
 ```bash
 cd drivoR

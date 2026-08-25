@@ -155,7 +155,10 @@ def main(cfg: DictConfig) -> None:
         return latest_file
 
 
-    if cfg.train_ckpt_path is None:
+    no_resume = os.environ.get("DRIVOR_NO_RESUME", "0") == "1"
+    if no_resume:
+        logger.info("DRIVOR_NO_RESUME=1: skipping automatic checkpoint search; training from scratch.")
+    elif cfg.train_ckpt_path is None:
         # Pattern to match all .ckpt files in the base_path recursively
         search_pattern = "/".join(str(cfg.output_dir).split("/")[:-1]) + "/*/lightning_logs/version_*/checkpoints/" + '*.ckpt'
         print("/".join(str(cfg.output_dir).split("/")[:-1]))

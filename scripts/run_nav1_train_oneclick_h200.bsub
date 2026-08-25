@@ -1,0 +1,21 @@
+#!/bin/bash -l
+
+## Scheduler parameters ##
+
+#BSUB -J "drivoR_nav1_train_h200"                        # job name
+#BSUB -o drivoR_nav1_train_h200.%J.stdout                # optional: Have output written to specific file
+#BSUB -e drivoR_nav1_train_h200.%J.stderr                # optional: Have errors written to specific file
+#BSUB -q batch_h200                      # H200 queue (more free GPUs, faster than A100)
+#BSUB -W 8:00                           # wallclock 8h - short window for easier backfill; chains via train_chain.sh until 25 epochs
+#BSUB -n 24                              # CPU cores = 2 GPU x (16 workers + 1 main) + buffer = 34 + 6 buffer for system tasks
+#BSUB -M 17000                           # memory per CPU core in Mbyte
+#BSUB -R "span[hosts=1]"                 # keep all 2 GPUs on a single host (required for single-node DDP)
+#BSUB -gpu "num=2"                       # 2x H200
+#BSUB -P BH-000425-08-06                 # optional: fill in cluster project           
+
+## Job parameters ##
+
+export DRIVOR_NUM_WORKERS=11              # dataloader workers per GPU (increased from 11 to improve dataloader throughput)
+export BATCH_SIZE=32                      # per-GPU batch size; global batch = 2 GPU x 32 = 64 (same as original 4xA100 baseline)
+export NUM_GPUS=2                         # must match -gpu num above; used for LR scaling (sqrt rule) and LR scheduler T_max
+bash /home/roa7sgh/DrivoR/scripts/run_nav1_train_oneclick.sh

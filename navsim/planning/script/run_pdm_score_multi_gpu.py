@@ -38,7 +38,7 @@ from torch.utils.data import DataLoader
 from navsim.agents.abstract_agent import AbstractAgent
 from navsim.common.dataclasses import PDMResults, SensorConfig
 from navsim.common.dataloader import MetricCacheLoader, SceneFilter, SceneLoader
-from navsim.evaluate.pdm_score import pdm_score
+from navsim.evaluate.pdm_score import pdm_score, pdm_score_proposals
 from navsim.planning.script.builders.worker_pool_builder import build_worker
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
 from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
@@ -87,15 +87,30 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
         score_row: Dict[str, Any] = {"token": token, "valid": True}
         try:
             metric_cache = metric_cache_loader.get_from_token(token)
-            trajectory = model_trajectory[token]['trajectory']
-
-            pdm_result = pdm_score(
-                metric_cache=metric_cache,
-                model_trajectory=trajectory,
-                future_sampling=simulator.proposal_sampling,
-                simulator=simulator,
-                scorer=scorer,
-            )
+            prediction = model_trajectory[token]
+            if cfg.evaluate_all_proposals:
+                proposal_results = pdm_score_proposals(
+                    metric_cache=metric_cache,
+                    model_trajectories=prediction["proposals"],
+                    future_sampling=simulator.proposal_sampling,
+                    simulator=simulator,
+                    scorer=scorer,
+                )
+                selected_idx = prediction["selected_proposal_idx"]
+                pdm_result = proposal_results[selected_idx]
+                best_idx = int(np.argmax([result.score for result in proposal_results]))
+                score_row["best_proposal_idx"] = best_idx
+                score_row.update(
+                    {f"best_{key}": value for key, value in asdict(proposal_results[best_idx]).items()}
+                )
+            else:
+                pdm_result = pdm_score(
+                    metric_cache=metric_cache,
+                    model_trajectory=prediction['trajectory'],
+                    future_sampling=simulator.proposal_sampling,
+                    simulator=simulator,
+                    scorer=scorer,
+                )
             score_row.update(asdict(pdm_result))
         except Exception as e:
             logger.warning(f"----------- Agent failed for token {token}:")
@@ -146,7 +161,7 @@ def main(cfg: DictConfig) -> None:
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
     trainer = pl.Trainer(**cfg.trainer.params)
     predictions = trainer.predict(
-        AgentLightningModule(agent=agent),
+        AgentLightningModule(agent=agent, export_all_proposals=cfg.evaluate_all_proposals),
         dataloader,
         return_predictions=True
     )
@@ -189,9 +204,14 @@ def main(cfg: DictConfig) -> None:
     pdm_score_df = pd.DataFrame(score_rows)
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
     num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
-    average_row = pdm_score_df.drop(columns=["token", "valid"]).mean(skipna=True)
+    non_metric_columns = ["token", "valid", "best_proposal_idx"]
+    average_row = pdm_score_df.drop(
+        columns=[column for column in non_metric_columns if column in pdm_score_df]
+    ).mean(skipna=True)
     average_row["token"] = "average"
     average_row["valid"] = pdm_score_df["valid"].all()
+    if "best_proposal_idx" in pdm_score_df:
+        average_row["best_proposal_idx"] = np.nan
     pdm_score_df.loc[len(pdm_score_df)] = average_row
 
     save_path = Path(cfg.output_dir)
@@ -203,7 +223,8 @@ def main(cfg: DictConfig) -> None:
         Finished running evaluation.
             Number of successful scenarios: {num_sucessful_scenarios}.
             Number of failed scenarios: {num_failed_scenarios}.
-            Final average score of valid results: {pdm_score_df['score'].mean()}.
+            Final average score of valid results: {average_row['score']}.
+            Best-of-all-proposal average score: {average_row.get('best_score', 'not computed')}.
             Results are stored in: {save_path / f"{timestamp}.csv"}.
 
             All scores:

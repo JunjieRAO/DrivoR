@@ -1,0 +1,24 @@
+#!/bin/bash -l
+
+#BSUB -J "drivoR_nav1_eval_best"
+#BSUB -o drivoR_nav1_eval_best.%J.stdout
+#BSUB -e drivoR_nav1_eval_best.%J.stderr
+#BSUB -q batch_a100
+#BSUB -W 36:00
+#BSUB -n 8
+#BSUB -M 16000
+#BSUB -R "span[hosts=1]"
+#BSUB -gpu "num=1"
+#BSUB -P BH-000425-08-06
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-/home/roa7sgh/DrivoR}"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-$REPO_ROOT/weights/drivor_Nav1_25epochs.pth}"
+
+cd "$REPO_ROOT"
+
+export EVAL_DEVICES="${EVAL_DEVICES:-1}"
+export EXPERIMENT_NAME="${EXPERIMENT_NAME:-drivoR_nav1_best_of_all}"
+export SKIP_METRIC_CACHE="${SKIP_METRIC_CACHE:-1}"
+bash scripts/run_nav1_eval_oneclick.sh "$CHECKPOINT_PATH"
