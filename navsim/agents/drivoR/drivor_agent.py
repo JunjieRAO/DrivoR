@@ -66,6 +66,11 @@ class DrivoRAgent(AbstractAgent):
             config,
             lr_args: dict,
             checkpoint_path: str = None,
+            image_backbone_checkpoint_path: str = "",
+            lidar_backbone_checkpoint_path: str = "",
+            freeze_image_backbone: bool = False,
+            freeze_lidar_backbone: bool = False,
+            train_metric_cache_path: str = "",
             loss: nn.Module = None,
             progress_bar: bool = True,
             scheduler_args: dict = None,
@@ -80,12 +85,25 @@ class DrivoRAgent(AbstractAgent):
         self.scheduler_args = scheduler_args
         self.batch_size = batch_size
         self.num_gpus = num_gpus
+        self.train_metric_cache_path = train_metric_cache_path
 
 
         cache_data=False
 
         if not cache_data:
             self._drivor_model = DrivoRModel(config)
+            self._initialize_backbone(
+                "image_backbone",
+                "scene_embeds",
+                image_backbone_checkpoint_path,
+                freeze_image_backbone,
+            )
+            self._initialize_backbone(
+                "lidar_backbone",
+                "lidar_scene_embeds",
+                lidar_backbone_checkpoint_path,
+                freeze_lidar_backbone,
+            )
 
         if not cache_data and self._checkpoint_path == "": # only for training
             self.bce_logit_loss = nn.BCEWithLogitsLoss()
@@ -102,7 +120,10 @@ class DrivoRAgent(AbstractAgent):
 
             from .score_module.compute_navsim_score import get_scores
 
-            metric_cache = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_cache"))
+            metric_cache_path = self.train_metric_cache_path or str(
+                Path(os.environ["NAVSIM_EXP_ROOT"]) / "train_metric_cache"
+            )
+            metric_cache = MetricCacheLoader(Path(metric_cache_path))
             try:
                 # add synthetic metric_cache
                 metric_cache_synthetic_0 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-0"))
@@ -129,6 +150,57 @@ class DrivoRAgent(AbstractAgent):
             self.get_scores = get_scores
 
             self.loss = loss
+
+    def _initialize_backbone(
+        self, name: str, scene_embed_name: str, checkpoint_path: str, freeze: bool
+    ) -> None:
+        if not hasattr(self._drivor_model, name):
+            if checkpoint_path or freeze:
+                raise ValueError(
+                    f"Cannot initialize {name}: the branch is disabled by the sensor configuration."
+                )
+            return
+
+        module = getattr(self._drivor_model, name)
+        if checkpoint_path:
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            state_dict = checkpoint.get("state_dict", checkpoint)
+            marker = f"{name}."
+            module_state_dict = {
+                key.split(marker, 1)[1]: value
+                for key, value in state_dict.items()
+                if marker in key
+            }
+            if not module_state_dict:
+                raise ValueError(f"Checkpoint {checkpoint_path} contains no {name} weights.")
+            module.load_state_dict(module_state_dict, strict=True)
+            print(f"Loaded {len(module_state_dict)} {name} tensors from {checkpoint_path}")
+
+            scene_embed_keys = [
+                key for key in state_dict if key.split(".")[-1] == scene_embed_name
+            ]
+            if len(scene_embed_keys) != 1:
+                raise ValueError(
+                    f"Checkpoint {checkpoint_path} must contain exactly one {scene_embed_name}; "
+                    f"found {len(scene_embed_keys)}."
+                )
+            scene_embed = getattr(self._drivor_model, scene_embed_name)
+            loaded_scene_embed = state_dict[scene_embed_keys[0]]
+            if scene_embed.shape != loaded_scene_embed.shape:
+                raise ValueError(
+                    f"{scene_embed_name} shape mismatch: model {tuple(scene_embed.shape)}, "
+                    f"checkpoint {tuple(loaded_scene_embed.shape)}"
+                )
+            scene_embed.data.copy_(loaded_scene_embed)
+            print(f"Loaded {scene_embed_name} from {checkpoint_path}")
+
+        if freeze:
+            for parameter in module.parameters():
+                parameter.requires_grad = False
+            getattr(self._drivor_model, scene_embed_name).requires_grad = False
+            module.eval()
+            self._drivor_model.freeze_backbone(name)
+            print(f"Frozen {name} and {scene_embed_name}")
             
 
 
@@ -237,12 +309,30 @@ class DrivoRAgent(AbstractAgent):
     def get_optimizers(self):
 
         global_batchsize = self.batch_size * self.num_gpus
+        trainable_named_parameters = [
+            (name, parameter)
+            for name, parameter in self._drivor_model.named_parameters()
+            if parameter.requires_grad
+        ]
+        trainable_parameters = [parameter for _, parameter in trainable_named_parameters]
+        if not trainable_parameters:
+            raise RuntimeError("No trainable DrivoR parameters remain after freezing.")
+        trainable_count = sum(parameter.numel() for parameter in trainable_parameters)
+        total_count = sum(parameter.numel() for parameter in self._drivor_model.parameters())
+        print(
+            f"Trainable DrivoR parameters: {trainable_count:,} / {total_count:,} "
+            f"({100 * trainable_count / total_count:.2f}%)"
+        )
+        print(
+            "Trainable top-level modules: "
+            + ", ".join(sorted({name.split('.', 1)[0] for name, _ in trainable_named_parameters}))
+        )
         if self._lr_args["name"] == "Adam":
             lr = self._lr_args["base_lr"] * math.sqrt(global_batchsize / self._lr_args["base_batch_size"])
-            optimizer = torch.optim.Adam(self._drivor_model.parameters(), lr=lr)
+            optimizer = torch.optim.Adam(trainable_parameters, lr=lr)
         elif self._lr_args["name"] == "AdamW":
             lr = self._lr_args["base_lr"] * math.sqrt(global_batchsize / self._lr_args["base_batch_size"])
-            optimizer = torch.optim.AdamW(self._drivor_model.parameters(), lr=lr)
+            optimizer = torch.optim.AdamW(trainable_parameters, lr=lr)
         else:
             raise NotImplementedError
 

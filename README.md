@@ -93,6 +93,28 @@ python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training_full.py  \
     seed=2
 ```
 
+To initialize and freeze the image backbone and scene embeddings while training
+the trajectory generator and scorer from scratch locally:
+```bash
+GPU_IDS=0,1 \
+DATALOADER_WORKERS=16 \
+BATCH_SIZE=16 \
+MAX_EPOCHS=25 \
+bash scripts/nav1_train_frozen_backbones.sh
+```
+
+The image checkpoint defaults to
+`/home/roa7sgh/DrivoR/weights/drivor_Nav1_25epochs.pth`. Image-only
+initialization is supported and disables the lidar branch. To enable lidar,
+set `LIDAR_BACKBONE_CHECKPOINT` to a checkpoint trained with
+`agent.config.lidar_pc=[3]`; its lidar backbone and lidar scene embeddings are
+also loaded and frozen. Set `DATA_ROOT`, `REPO_ROOT`, or
+`TRAIN_METRIC_CACHE_PATH` to override the local data defaults. Training results
+are always written below `$REPO_ROOT/exp`.
+Automatic resume is disabled by default so the trajectory generator and scorer
+remain newly initialized; set `DRIVOR_NO_RESUME=0` only when resuming a run
+created by this training mode.
+
 
 For NAVSIM-v2 model:
 ```bash

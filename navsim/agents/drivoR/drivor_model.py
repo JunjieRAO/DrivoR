@@ -15,6 +15,7 @@ class DrivoRModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self._config = config
+        self._frozen_backbones = set()
         self.poses_num=config.num_poses
         self.state_size=3
         self.embed_dims = self._config.tf_d_model
@@ -102,6 +103,16 @@ class DrivoRModel(nn.Module):
         self.scorer = Scorer(config)
 
         self.b2d=config.b2d
+
+    def freeze_backbone(self, name: str) -> None:
+        self._frozen_backbones.add(name)
+        getattr(self, name).eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        for name in self._frozen_backbones:
+            getattr(self, name).eval()
+        return self
 
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

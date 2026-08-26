@@ -77,6 +77,9 @@ config:
     finetune: false
     lora_rank: 32
     in_chans: 2 # 2 if use ground plane, 1 otherwise
+    focus_front_cam: false
+    use_feature_pooling: false
+    compress_fc: false
 
 
   ####################
@@ -113,6 +116,11 @@ loss:
 
 
 checkpoint_path: ''
+image_backbone_checkpoint_path: ''
+lidar_backbone_checkpoint_path: ''
+freeze_image_backbone: false
+freeze_lidar_backbone: false
+train_metric_cache_path: ''
 lr_args: 
   name: AdamW
   base_lr: 5e-4
