@@ -21,7 +21,7 @@ import uuid
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 from dataclasses import asdict
 
 import hydra
@@ -49,6 +49,15 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config/pdm_scoring"
 CONFIG_NAME = "default_run_pdm_score_gpu"
+
+PREDICTED_SUBSCORE_NAMES = (
+    "no_at_fault_collisions",
+    "drivable_area_compliance",
+    "time_to_collision_within_bound",
+    "ego_progress",
+    "driving_direction_compliance",
+    "comfort",
+)
 
 def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[pd.DataFrame]:
     """
@@ -97,9 +106,38 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
                     scorer=scorer,
                 )
                 selected_idx = prediction["selected_proposal_idx"]
+                proposal_count = len(proposal_results)
+                if not 0 <= selected_idx < proposal_count:
+                    raise ValueError(
+                        f"Selected proposal index {selected_idx} is outside [0, {proposal_count})"
+                    )
+                predicted_subscores = prediction["predicted_subscores"]
+                predicted_pdm_scores = np.asarray(prediction["predicted_pdm_scores"])
+                if predicted_pdm_scores.shape != (proposal_count,):
+                    raise ValueError(
+                        "Expected predicted_pdm_scores shape "
+                        f"({proposal_count},), got {predicted_pdm_scores.shape}"
+                    )
+                for metric_name in PREDICTED_SUBSCORE_NAMES:
+                    if metric_name not in predicted_subscores:
+                        raise ValueError(f"Missing predicted subscore {metric_name!r}")
+                    metric_scores = np.asarray(predicted_subscores[metric_name])
+                    if metric_scores.shape != (proposal_count,):
+                        raise ValueError(
+                            f"Expected predicted_subscores[{metric_name!r}] shape "
+                            f"({proposal_count},), got {metric_scores.shape}"
+                        )
+
                 pdm_result = proposal_results[selected_idx]
                 best_idx = int(np.argmax([result.score for result in proposal_results]))
+                score_row["selected_proposal_idx"] = selected_idx
                 score_row["best_proposal_idx"] = best_idx
+                for metric_name in PREDICTED_SUBSCORE_NAMES:
+                    metric_scores = np.asarray(predicted_subscores[metric_name])
+                    score_row[f"selected_pred_{metric_name}"] = float(metric_scores[selected_idx])
+                    score_row[f"best_pred_{metric_name}"] = float(metric_scores[best_idx])
+                score_row["selected_pred_pdm_score"] = float(predicted_pdm_scores[selected_idx])
+                score_row["best_pred_pdm_score"] = float(predicted_pdm_scores[best_idx])
                 score_row.update(
                     {f"best_{key}": value for key, value in asdict(proposal_results[best_idx]).items()}
                 )
@@ -204,14 +242,16 @@ def main(cfg: DictConfig) -> None:
     pdm_score_df = pd.DataFrame(score_rows)
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
     num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
-    non_metric_columns = ["token", "valid", "best_proposal_idx"]
+    index_columns = ["selected_proposal_idx", "best_proposal_idx"]
+    non_metric_columns = ["token", "valid", *index_columns]
     average_row = pdm_score_df.drop(
         columns=[column for column in non_metric_columns if column in pdm_score_df]
     ).mean(skipna=True)
     average_row["token"] = "average"
     average_row["valid"] = pdm_score_df["valid"].all()
-    if "best_proposal_idx" in pdm_score_df:
-        average_row["best_proposal_idx"] = np.nan
+    for column in index_columns:
+        if column in pdm_score_df:
+            average_row[column] = np.nan
     pdm_score_df.loc[len(pdm_score_df)] = average_row
 
     save_path = Path(cfg.output_dir)

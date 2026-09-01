@@ -133,7 +133,29 @@ class AgentLightningModule(pl.LightningModule):
             poses = predictions["trajectory"]
             if self.export_all_proposals:
                 proposals = predictions["proposals"]
-                selected_indices = torch.argmax(predictions["pdm_score"], dim=1)
+                predicted_pdm_scores = predictions["pdm_score"]
+                predicted_subscores = {
+                    metric_name: torch.sigmoid(metric_logits)
+                    for metric_name, metric_logits in predictions["pred_logit"].items()
+                }
+                if predicted_pdm_scores.ndim != 2:
+                    raise ValueError(
+                        "Expected pdm_score shape [B, N], "
+                        f"got {tuple(predicted_pdm_scores.shape)}"
+                    )
+                expected_shape = tuple(predicted_pdm_scores.shape)
+                if tuple(proposals.shape[:2]) != expected_shape:
+                    raise ValueError(
+                        f"Expected proposals prefix {expected_shape}, "
+                        f"got {tuple(proposals.shape[:2])}"
+                    )
+                for metric_name, metric_scores in predicted_subscores.items():
+                    if tuple(metric_scores.shape) != expected_shape:
+                        raise ValueError(
+                            f"Expected pred_logit[{metric_name!r}] shape {expected_shape}, "
+                            f"got {tuple(metric_scores.shape)}"
+                        )
+                selected_indices = torch.argmax(predicted_pdm_scores, dim=1)
             if self.for_viz:
                 all_proposed_trajectories = predictions["proposal_list"]
                 final_trajectories = predictions["proposals"]
@@ -156,5 +178,18 @@ class AgentLightningModule(pl.LightningModule):
                     result[token]['proposals'] = [
                         Trajectory(poses) for poses in proposals[index].cpu().numpy()
                     ]
-                    result[token]['selected_proposal_idx'] = int(selected_indices[index].item())
+                    selected_idx = int(selected_indices[index].item())
+                    proposal_count = proposals.shape[1]
+                    if not 0 <= selected_idx < proposal_count:
+                        raise ValueError(
+                            f"Selected proposal index {selected_idx} is outside [0, {proposal_count})"
+                        )
+                    result[token]['selected_proposal_idx'] = selected_idx
+                    result[token]['predicted_subscores'] = {
+                        metric_name: metric_scores[index].detach().cpu().numpy()
+                        for metric_name, metric_scores in predicted_subscores.items()
+                    }
+                    result[token]['predicted_pdm_scores'] = (
+                        predicted_pdm_scores[index].detach().cpu().numpy()
+                    )
         return result
