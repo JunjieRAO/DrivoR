@@ -217,7 +217,19 @@ class DrivoRAgent(AbstractAgent):
             else:
                 state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
                     "state_dict"]
-            self.load_state_dict({k.replace("agent._drivor_model", "_drivor_model"): v for k, v in state_dict.items()})
+            mapped_state_dict = {
+                k.replace("agent._drivor_model", "_drivor_model"): v
+                for k, v in state_dict.items()
+            }
+            incompatible = self.load_state_dict(mapped_state_dict, strict=False)
+            allowed_missing = {"_drivor_model.metric_type_embeddings.weight"}
+            unexpected_missing = set(incompatible.missing_keys) - allowed_missing
+            if unexpected_missing or incompatible.unexpected_keys:
+                raise RuntimeError(
+                    "Checkpoint is incompatible with DrivoR: "
+                    f"missing={sorted(unexpected_missing)}, "
+                    f"unexpected={sorted(incompatible.unexpected_keys)}"
+                )
 
     def get_sensor_config(self) :
         """Inherited, see superclass."""

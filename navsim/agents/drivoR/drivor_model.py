@@ -2,7 +2,7 @@ from typing import Dict
 import numpy as np
 import torch
 import torch.nn as nn
-from .score_module.scorer import Scorer
+from .score_module.scorer import METRIC_ORDER, Scorer
 from .transformer_decoder import TransformerDecoder, TransformerDecoderScorer
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
@@ -91,6 +91,8 @@ class DrivoRModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(config.tf_d_ffn, config.tf_d_model),
             )
+        self.metric_type_embeddings = nn.Embedding(len(METRIC_ORDER), config.tf_d_model)
+        nn.init.zeros_(self.metric_type_embeddings.weight)
 
 
         # get the trajectory decoders
@@ -186,10 +188,23 @@ class DrivoRModel(nn.Module):
         B,N,_,_=proposals.shape
 
         embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
-        tr_out = tr_out+ego_token
+        metric_tokens = (
+            embedded_traj.unsqueeze(2)
+            + self.metric_type_embeddings.weight[None, None, :, :]
+        )
+        metric_tokens = metric_tokens.reshape(B * N, len(METRIC_ORDER), self.embed_dims)
+
+        scene_token_count = scene_features.shape[1]
+        proposal_scene_features = scene_features[:, None].expand(
+            B, N, scene_token_count, self.embed_dims
+        ).reshape(B * N, scene_token_count, self.embed_dims)
+
+        tr_out = self.scorer_attention(metric_tokens, proposal_scene_features)
+        tr_out = tr_out.reshape(B, N, len(METRIC_ORDER), self.embed_dims)
+        tr_out = tr_out + ego_token.unsqueeze(2)
         pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
 
+        output["metric_tokens"] = tr_out
         output["pred_logit"]=pred_logit
         output["pred_logit2"]=pred_logit2
         output["pred_agents_states"]=pred_agents_states
