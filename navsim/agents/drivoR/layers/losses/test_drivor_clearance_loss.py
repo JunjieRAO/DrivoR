@@ -22,7 +22,8 @@ def test_near_collision_target_has_larger_gradient_weight() -> None:
     loss_fn = DrivoRLoss(
         clearance_clip_min=-1.0,
         clearance_clip_max=5.0,
-        clearance_near_alpha=1.0,
+        clearance_far_weight=0.25,
+        clearance_near_alpha=1.75,
         clearance_near_tau=1.0,
     )
     prediction = torch.tensor([[[0.8, 6.0]]], requires_grad=True)
@@ -32,6 +33,43 @@ def test_near_collision_target_has_larger_gradient_weight() -> None:
 
     assert prediction.grad is not None
     assert prediction.grad[0, 0, 0] > prediction.grad[0, 0, 1]
+
+
+def test_weighted_collision_sign_loss_prioritizes_collisions() -> None:
+    loss_fn = DrivoRLoss(
+        collision_sign_temperature=1.0,
+        collision_positive_weight=5.0,
+        collision_near_weight=2.0,
+        collision_far_weight=0.25,
+        collision_near_threshold=1.0,
+    )
+    prediction = torch.tensor([[[1.0, -1.0, -1.0]]], requires_grad=True)
+    target = torch.tensor([[[-0.5, 0.5, 2.0]]])
+
+    loss_fn.collision_sign_loss(prediction, target).backward()
+
+    assert prediction.grad is not None
+    assert prediction.grad[0, 0, 0].abs() > prediction.grad[0, 0, 1].abs()
+    assert prediction.grad[0, 0, 1].abs() > prediction.grad[0, 0, 2].abs()
+
+
+def test_clearance_metrics_match_known_predictions() -> None:
+    loss_fn = DrivoRLoss(
+        collision_sign_temperature=1.0,
+        collision_near_threshold=1.0,
+    )
+    prediction = torch.tensor([[[-0.5, 0.2, -0.1, 3.0]]])
+    target = torch.tensor([[[-0.5, -0.2, 0.5, 2.0]]])
+
+    metrics = loss_fn.clearance_metrics(prediction, target)
+
+    assert torch.allclose(metrics["collision_positive_ratio"], torch.tensor(0.5))
+    assert torch.allclose(metrics["collision_precision"], torch.tensor(0.5))
+    assert torch.allclose(metrics["collision_recall"], torch.tensor(0.5))
+    assert torch.allclose(metrics["collision_auprc"], torch.tensor(5.0 / 6.0))
+    assert torch.allclose(metrics["clearance_sign_accuracy"], torch.tensor(0.5))
+    assert torch.allclose(metrics["clearance_mae_collision"], torch.tensor(0.2))
+    assert torch.allclose(metrics["clearance_mae_near"], torch.tensor(1.0 / 3.0))
 
 
 def test_loss_forward_consumes_clearance_targets() -> None:
@@ -81,4 +119,7 @@ def test_loss_forward_consumes_clearance_targets() -> None:
 
     assert torch.isfinite(loss_dict["loss"])
     assert torch.isfinite(loss_dict["clearance_loss"])
+    assert torch.isfinite(loss_dict["collision_sign_loss"])
+    assert "collision_positive_ratio" in loss_dict
+    assert "collision_auprc" in loss_dict
     assert pred_clearance.grad is not None

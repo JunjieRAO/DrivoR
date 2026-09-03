@@ -135,8 +135,15 @@ class DrivoRLoss(torch.nn.Module):
                         clearance_weight: float = 0.2,
                         clearance_clip_min: float = -1.0,
                         clearance_clip_max: float = 5.0,
-                        clearance_near_alpha: float = 1.0,
+                        clearance_far_weight: float = 0.25,
+                        clearance_near_alpha: float = 1.75,
                         clearance_near_tau: float = 1.0,
+                        collision_sign_weight: float = 0.2,
+                        collision_sign_temperature: float = 0.25,
+                        collision_positive_weight: float = 5.0,
+                        collision_near_weight: float = 2.0,
+                        collision_far_weight: float = 0.25,
+                        collision_near_threshold: float = 1.0,
                         **kwargs):
         super().__init__()
 
@@ -154,22 +161,98 @@ class DrivoRLoss(torch.nn.Module):
         self.clearance_weight = clearance_weight
         self.clearance_clip_min = clearance_clip_min
         self.clearance_clip_max = clearance_clip_max
+        self.clearance_far_weight = clearance_far_weight
         self.clearance_near_alpha = clearance_near_alpha
         self.clearance_near_tau = clearance_near_tau
+        self.collision_sign_weight = collision_sign_weight
+        self.collision_sign_temperature = collision_sign_temperature
+        self.collision_positive_weight = collision_positive_weight
+        self.collision_near_weight = collision_near_weight
+        self.collision_far_weight = collision_far_weight
+        self.collision_near_threshold = collision_near_threshold
         if clearance_clip_min >= clearance_clip_max:
             raise ValueError("clearance_clip_min must be smaller than clearance_clip_max.")
         if clearance_near_tau <= 0:
             raise ValueError("clearance_near_tau must be positive.")
+        if clearance_far_weight < 0 or clearance_near_alpha < 0:
+            raise ValueError("clearance regression weights must be non-negative.")
+        if collision_sign_temperature <= 0:
+            raise ValueError("collision_sign_temperature must be positive.")
+        if min(collision_positive_weight, collision_near_weight, collision_far_weight) < 0:
+            raise ValueError("collision sign sample weights must be non-negative.")
 
     def clearance_loss(self, prediction, target):
         target = target.to(prediction.dtype).clamp(
             self.clearance_clip_min, self.clearance_clip_max
         )
         point_loss = F.smooth_l1_loss(prediction, target, reduction="none")
-        weights = 1.0 + self.clearance_near_alpha * torch.exp(
+        weights = self.clearance_far_weight + self.clearance_near_alpha * torch.exp(
             -target.abs() / self.clearance_near_tau
         )
         return (point_loss * weights).sum() / weights.sum().clamp(min=1.0)
+
+    def collision_sign_loss(self, prediction, target):
+        target = target.to(prediction.dtype).clamp(
+            self.clearance_clip_min, self.clearance_clip_max
+        )
+        collision_target = (target <= 0).to(prediction.dtype)
+        collision_logit = -prediction / self.collision_sign_temperature
+        weights = torch.where(
+            target <= 0,
+            self.collision_positive_weight,
+            torch.where(
+                target < self.collision_near_threshold,
+                self.collision_near_weight,
+                self.collision_far_weight,
+            ),
+        )
+        point_loss = F.binary_cross_entropy_with_logits(
+            collision_logit, collision_target, reduction="none"
+        )
+        return (point_loss * weights).sum() / weights.sum().clamp(min=1.0)
+
+    @torch.no_grad()
+    def clearance_metrics(self, prediction, target):
+        target = target.to(prediction.dtype).clamp(
+            self.clearance_clip_min, self.clearance_clip_max
+        )
+        collision_target = target <= 0
+        collision_prediction = prediction <= 0
+
+        true_positive = (collision_prediction & collision_target).sum().float()
+        predicted_positive = collision_prediction.sum().float()
+        positive = collision_target.sum().float()
+        collision_precision = true_positive / predicted_positive.clamp(min=1.0)
+        collision_recall = true_positive / positive.clamp(min=1.0)
+
+        scores = (-prediction / self.collision_sign_temperature).flatten()
+        labels = collision_target.flatten()
+        order = torch.argsort(scores, descending=True)
+        sorted_labels = labels[order].float()
+        cumulative_positive = sorted_labels.cumsum(dim=0)
+        ranks = torch.arange(
+            1, sorted_labels.numel() + 1, device=prediction.device, dtype=prediction.dtype
+        )
+        precision_at_rank = cumulative_positive / ranks
+        collision_auprc = (
+            (precision_at_rank * sorted_labels).sum() / positive.clamp(min=1.0)
+        )
+
+        absolute_error = (prediction - target).abs()
+        near_mask = target < self.collision_near_threshold
+        collision_mae = (absolute_error * collision_target).sum() / positive.clamp(min=1.0)
+        near_count = near_mask.sum().float()
+        near_mae = (absolute_error * near_mask).sum() / near_count.clamp(min=1.0)
+
+        return {
+            "collision_positive_ratio": collision_target.float().mean(),
+            "collision_precision": collision_precision,
+            "collision_recall": collision_recall,
+            "collision_auprc": collision_auprc,
+            "clearance_sign_accuracy": (collision_prediction == collision_target).float().mean(),
+            "clearance_mae_collision": collision_mae,
+            "clearance_mae_near": near_mae,
+        }
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,
@@ -312,9 +395,17 @@ class DrivoRLoss(torch.nn.Module):
                 pred["pred_agents_states"], pred["pred_area_logit"]
                 , target_scores, gt_states, gt_valid, gt_ego_areas, l2_distance.detach())
             clearance_loss = self.clearance_loss(pred["pred_clearance"], gt_clearance)
+            collision_sign_loss = self.collision_sign_loss(
+                pred["pred_clearance"], gt_clearance
+            )
+            clearance_metrics = self.clearance_metrics(
+                pred["pred_clearance"], gt_clearance
+            )
         else:
             sub_score_loss = final_score_loss = pred_ce_loss = pred_l1_loss = pred_area_loss = 0
             clearance_loss = 0
+            collision_sign_loss = 0
+            clearance_metrics = {}
 
 
         if pred["agent_states"] is not None:
@@ -340,6 +431,7 @@ class DrivoRLoss(torch.nn.Module):
                 + self.agent_box_weight * agent_box_loss
                 + self.bev_semantic_weight * bev_semantic_loss
                 + self.clearance_weight * clearance_loss
+                + self.collision_sign_weight * collision_sign_loss
 
         )
 
@@ -365,6 +457,7 @@ class DrivoRLoss(torch.nn.Module):
             'pred_l1_loss': pred_l1_loss,
             'pred_area_loss': pred_area_loss,
             "clearance_loss": clearance_loss,
+            "collision_sign_loss": collision_sign_loss,
             "inter_loss0": inter_loss0,
             # "inter_loss1": inter_loss1,
             "inter_loss": inter_loss,
@@ -374,5 +467,6 @@ class DrivoRLoss(torch.nn.Module):
             "score": score,
             "best_score": best_score
         }
+        loss_dict.update(clearance_metrics)
 
         return loss_dict

@@ -61,6 +61,17 @@ aligned with PDM simulation indices `[5, 10, ..., 40]` at 0.1-second intervals.
 Clearance is an auxiliary scorer loss and does not alter the official PDM score
 or require tracked objects at inference time.
 
+The clearance loss weights distance regression by
+`0.25 + 1.75 * exp(-abs(clearance) / 1m)`, emphasizing the contact boundary
+without discarding far-safe samples. Collision-sign classification is derived
+directly from `-pred_clearance / temperature`; collision, near-collision, and
+far-safe samples use configurable weights of `5.0`, `2.0`, and `0.25` by
+default. Training logs include batch-level
+`collision_positive_ratio`, `collision_precision`, `collision_recall`,
+`collision_auprc`, `clearance_sign_accuracy`, `clearance_mae_collision`, and
+`clearance_mae_near`. Batch AUPRC is intended for training diagnostics rather
+than an exact dataset-level AUPRC.
+
 The scorer settings live in
 `navsim/planning/script/config/common/agent/drivoR.yaml`. Important overrides
 include:
@@ -71,7 +82,8 @@ agent.config.scene_scorer_num_layers=2 \
 agent.config.temporal_scorer_num_heads=4 \
 agent.config.nc_risk_pool_temperature=0.5 \
 agent.config.ttc_risk_pool_temperature=0.5 \
-agent.loss.clearance_weight=0.2
+agent.loss.clearance_weight=0.2 \
+agent.loss.collision_sign_weight=0.2
 ```
 
 The temporal scorer replaces the legacy scorer, so full checkpoints produced

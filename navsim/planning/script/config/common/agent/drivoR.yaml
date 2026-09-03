@@ -123,8 +123,15 @@ loss:
   clearance_weight: 0.2
   clearance_clip_min: ${agent.config.clearance_clip_min}
   clearance_clip_max: ${agent.config.clearance_clip_max}
-  clearance_near_alpha: 1.0
+  clearance_far_weight: 0.25
+  clearance_near_alpha: 1.75
   clearance_near_tau: 1.0
+  collision_sign_weight: 0.2
+  collision_sign_temperature: 0.25
+  collision_positive_weight: 5.0
+  collision_near_weight: 2.0
+  collision_far_weight: 0.25
+  collision_near_threshold: 1.0
   div_weight: 0.0
 
 
