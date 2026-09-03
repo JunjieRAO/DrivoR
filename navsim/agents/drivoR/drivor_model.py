@@ -2,8 +2,8 @@ from typing import Dict
 import numpy as np
 import torch
 import torch.nn as nn
-from .score_module.scorer import Scorer
-from .transformer_decoder import TransformerDecoder, TransformerDecoderScorer
+from .score_module.temporal_scorer import TemporalRiskScorer
+from .transformer_decoder import TransformerDecoder
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
 from navsim.agents.drivoR.utils import pylogger
@@ -83,16 +83,6 @@ class DrivoRModel(nn.Module):
         # trajectory decoder
         self.trajectory_decoder = TransformerDecoder(proj_drop=0.1, drop_path=0.2, config=config)
 
-        # scorer decoder
-        self.scorer_attention = TransformerDecoderScorer(num_layers=config.scorer_ref_num, d_model=config.tf_d_model, proj_drop=0.1, drop_path=0.2, config=config)
-
-        self.pos_embed = nn.Sequential(
-                nn.Linear(self.poses_num * 3, config.tf_d_ffn),
-                nn.ReLU(),
-                nn.Linear(config.tf_d_ffn, config.tf_d_model),
-            )
-
-
         # get the trajectory decoders
         self.poses_num=config.num_poses
         self.state_size=3
@@ -100,7 +90,7 @@ class DrivoRModel(nn.Module):
         self.traj_head = nn.ModuleList([MLP(config.tf_d_model, config.tf_d_ffn,  traj_head_output_size) for _ in range(ref_num+1)])
 
         # scorer
-        self.scorer = Scorer(config)
+        self.scorer = TemporalRiskScorer(config)
 
         self.b2d=config.b2d
 
@@ -185,18 +175,18 @@ class DrivoRModel(nn.Module):
         # scoring
         B,N,_,_=proposals.shape
 
-        embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
-        tr_out = tr_out+ego_token
-        pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
+        pred_logit, pred_clearance = self.scorer(
+            proposals.detach(), scene_features, ego_token
+        )
 
         output["pred_logit"]=pred_logit
-        output["pred_logit2"]=pred_logit2
-        output["pred_agents_states"]=pred_agents_states
-        output["pred_area_logit"]=pred_area_logit
-        output["bev_semantic_map"]=bev_semantic_map
-        output["agent_states"]=agent_states
-        output["agent_labels"]=agent_labels
+        output["pred_clearance"] = pred_clearance
+        output["pred_logit2"]=None
+        output["pred_agents_states"]=None
+        output["pred_area_logit"]=None
+        output["bev_semantic_map"]=None
+        output["agent_states"]=None
+        output["agent_labels"]=None
 
         pdm_score = (
         self._config.noc * pred_logit['no_at_fault_collisions'].sigmoid().log() +

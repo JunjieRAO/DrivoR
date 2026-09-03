@@ -12,6 +12,7 @@ from navsim.planning.simulation.planner.pdm_planner.utils.pdm_enums import (
 )
 import numpy as np
 from .train_pdm_scorer import PDMScorerConfig, PDMScorer
+from .clearance_utils import compute_temporal_clearance_targets, temporal_sampling_indices
 # from .train_pdm_scorer_v2_dev import PDMScorerConfig, PDMScorer
 
 # metric_cache_loader = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/metric_cache"))
@@ -22,10 +23,19 @@ scorer = PDMScorer(proposal_sampling, config)
 
 def get_scores(args):
 
-    return [get_sub_score(a["token"],a["poses"],a["test"]) for a in args]
+    return [
+        get_sub_score(
+            a["token"],
+            a["poses"],
+            a["test"],
+            a["clearance_clip_min"],
+            a["clearance_clip_max"],
+        )
+        for a in args
+    ]
 
 
-def get_sub_score( metric_cache,poses,test):
+def get_sub_score(metric_cache, poses, test, clearance_clip_min, clearance_clip_max):
 
     with lzma.open(metric_cache, "rb") as f:
         metric_cache = pickle.load(f)
@@ -54,6 +64,21 @@ def get_sub_score( metric_cache,poses,test):
         metric_cache.drivable_area_map,
         metric_cache.pdm_progress
     )
+
+    clearance_targets = None
+    if not test:
+        model_num_poses = poses.shape[1]
+        simulation_num_poses = scorer.proposal_sampling.num_poses
+        observation_indices = temporal_sampling_indices(
+            simulation_num_poses, model_num_poses
+        )
+        clearance_targets = compute_temporal_clearance_targets(
+            scorer._ego_polygons[:, observation_indices],
+            scorer._observation,
+            clearance_clip_min,
+            clearance_clip_max,
+            observation_indices,
+        )
 
     num_col=2
 
@@ -113,4 +138,4 @@ def get_sub_score( metric_cache,poses,test):
 
         key_agent_corners=key_agent_corners.dot(mat)
 
-    return scores,key_agent_corners,key_agent_labels,ego_areas
+    return scores,key_agent_corners,key_agent_labels,ego_areas,clearance_targets

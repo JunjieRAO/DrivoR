@@ -269,7 +269,9 @@ class DrivoRAgent(AbstractAgent):
             {
                 "token": metric_cache_paths[token] if token in metric_cache_paths else metric_cache_paths_synthetic[token],
                 "poses": poses,
-                "test": test
+                "test": test,
+                "clearance_clip_min": self._config.clearance_clip_min,
+                "clearance_clip_max": self._config.clearance_clip_max,
             }
             for token, poses in zip(targets["token"], proposals.cpu().numpy())
         ]
@@ -296,7 +298,9 @@ class DrivoRAgent(AbstractAgent):
 
             all_ego_areas = torch.BoolTensor(np.stack([res[3] for res in all_res])).to(proposals.device)
 
-            return final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas
+            clearance_targets = torch.FloatTensor(np.stack([res[4] for res in all_res])).to(proposals.device)
+
+            return final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas, clearance_targets
 
     def compute_loss(
             self,

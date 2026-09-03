@@ -91,6 +91,14 @@ config:
   bev_agent: false
   refiner_num_heads: 1
   refiner_ls_values: 0.0
+  temporal_scorer_num_layers: 2
+  scene_scorer_num_layers: 2
+  temporal_scorer_num_heads: 4
+  temporal_scorer_dropout: 0.1
+  nc_risk_pool_temperature: 0.5
+  ttc_risk_pool_temperature: 0.5
+  clearance_clip_min: -1.0
+  clearance_clip_max: 5.0
   
   trajectory_sampling:
     _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
@@ -112,6 +120,11 @@ loss:
   agent_class_weight: 1.0
   agent_box_weight: 0.1
   bev_semantic_weight: 1.0
+  clearance_weight: 0.2
+  clearance_clip_min: ${agent.config.clearance_clip_min}
+  clearance_clip_max: ${agent.config.clearance_clip_max}
+  clearance_near_alpha: 1.0
+  clearance_near_tau: 1.0
   div_weight: 0.0
 
 

@@ -42,6 +42,43 @@ pip install -e .
 
 # Training
 
+## Temporal risk scorer
+
+The default DrivoR scorer keeps one token per proposal timestep instead of
+flattening the full trajectory into a single token. Temporal self-attention is
+followed by cross-attention to the scene tokens. The resulting risk tokens feed
+three types of heads:
+
+- a shared per-timestep signed-clearance head;
+- separate temporal risk heads and log-sum-exp pooling for NC and TTC;
+- global temporal pooling for DAC, EP, DDC, and comfort.
+
+During training, signed clearance is computed against all tracked-object
+polygons in the metric cache. Positive values are separated polygons, zero is
+contact, and negative values are SAT penetration depth. Targets are clipped to
+`[-1, 5]` meters by default. The 8 model poses at 0.5-second intervals are
+aligned with PDM simulation indices `[5, 10, ..., 40]` at 0.1-second intervals.
+Clearance is an auxiliary scorer loss and does not alter the official PDM score
+or require tracked objects at inference time.
+
+The scorer settings live in
+`navsim/planning/script/config/common/agent/drivoR.yaml`. Important overrides
+include:
+
+```bash
+agent.config.temporal_scorer_num_layers=2 \
+agent.config.scene_scorer_num_layers=2 \
+agent.config.temporal_scorer_num_heads=4 \
+agent.config.nc_risk_pool_temperature=0.5 \
+agent.config.ttc_risk_pool_temperature=0.5 \
+agent.loss.clearance_weight=0.2
+```
+
+The temporal scorer replaces the legacy scorer, so full checkpoints produced
+by the old architecture are not shape-compatible. Image and LiDAR backbone
+checkpoints can still be loaded through the dedicated backbone checkpoint
+options below.
+
 ```bash
 cd drivoR
 conda activate drivoR

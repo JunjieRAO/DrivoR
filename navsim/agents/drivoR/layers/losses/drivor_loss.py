@@ -116,8 +116,7 @@ def _agent_loss(
     return ce_loss, l1_loss
 
 def three_to_two_classes(x):
-    x[x == 0.5] = 0.0
-    return x
+    return torch.where(x == 0.5, torch.zeros_like(x), x)
 
 class DrivoRLoss(torch.nn.Module):
 
@@ -133,6 +132,11 @@ class DrivoRLoss(torch.nn.Module):
                         agent_class_weight: float = 1.0,
                         agent_box_weight: float = 1.0,
                         bev_semantic_weight: float = 1.0,
+                        clearance_weight: float = 0.2,
+                        clearance_clip_min: float = -1.0,
+                        clearance_clip_max: float = 5.0,
+                        clearance_near_alpha: float = 1.0,
+                        clearance_near_tau: float = 1.0,
                         **kwargs):
         super().__init__()
 
@@ -147,6 +151,25 @@ class DrivoRLoss(torch.nn.Module):
         self.agent_class_weight = agent_class_weight
         self.agent_box_weight = agent_box_weight
         self.bev_semantic_weight = bev_semantic_weight
+        self.clearance_weight = clearance_weight
+        self.clearance_clip_min = clearance_clip_min
+        self.clearance_clip_max = clearance_clip_max
+        self.clearance_near_alpha = clearance_near_alpha
+        self.clearance_near_tau = clearance_near_tau
+        if clearance_clip_min >= clearance_clip_max:
+            raise ValueError("clearance_clip_min must be smaller than clearance_clip_max.")
+        if clearance_near_tau <= 0:
+            raise ValueError("clearance_near_tau must be positive.")
+
+    def clearance_loss(self, prediction, target):
+        target = target.to(prediction.dtype).clamp(
+            self.clearance_clip_min, self.clearance_clip_max
+        )
+        point_loss = F.smooth_l1_loss(prediction, target, reduction="none")
+        weights = 1.0 + self.clearance_near_alpha * torch.exp(
+            -target.abs() / self.clearance_near_tau
+        )
+        return (point_loss * weights).sum() / weights.sum().clamp(min=1.0)
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,
@@ -245,7 +268,7 @@ class DrivoRLoss(torch.nn.Module):
         proposal_list = pred["proposal_list"]
         target_trajectory = targets["trajectory"]
 
-        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas = scoring_function(
+        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas, gt_clearance = scoring_function(
             targets, proposals, test=False)
 
         ########
@@ -288,8 +311,10 @@ class DrivoRLoss(torch.nn.Module):
                 pred["pred_logit"], pred["pred_logit2"],
                 pred["pred_agents_states"], pred["pred_area_logit"]
                 , target_scores, gt_states, gt_valid, gt_ego_areas, l2_distance.detach())
+            clearance_loss = self.clearance_loss(pred["pred_clearance"], gt_clearance)
         else:
             sub_score_loss = final_score_loss = pred_ce_loss = pred_l1_loss = pred_area_loss = 0
+            clearance_loss = 0
 
 
         if pred["agent_states"] is not None:
@@ -314,6 +339,7 @@ class DrivoRLoss(torch.nn.Module):
                 + self.agent_class_weight * agent_class_loss
                 + self.agent_box_weight * agent_box_loss
                 + self.bev_semantic_weight * bev_semantic_loss
+                + self.clearance_weight * clearance_loss
 
         )
 
@@ -338,6 +364,7 @@ class DrivoRLoss(torch.nn.Module):
             'pred_ce_loss': pred_ce_loss,
             'pred_l1_loss': pred_l1_loss,
             'pred_area_loss': pred_area_loss,
+            "clearance_loss": clearance_loss,
             "inter_loss0": inter_loss0,
             # "inter_loss1": inter_loss1,
             "inter_loss": inter_loss,
