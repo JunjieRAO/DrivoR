@@ -28,6 +28,7 @@ def get_scores(args):
             a["token"],
             a["poses"],
             a["test"],
+            a["return_clearance"],
             a["clearance_clip_min"],
             a["clearance_clip_max"],
         )
@@ -35,7 +36,9 @@ def get_scores(args):
     ]
 
 
-def get_sub_score(metric_cache, poses, test, clearance_clip_min, clearance_clip_max):
+def get_sub_score(
+    metric_cache, poses, test, return_clearance, clearance_clip_min, clearance_clip_max
+):
 
     with lzma.open(metric_cache, "rb") as f:
         metric_cache = pickle.load(f)
@@ -66,7 +69,7 @@ def get_sub_score(metric_cache, poses, test, clearance_clip_min, clearance_clip_
     )
 
     clearance_targets = None
-    if not test:
+    if not test or return_clearance:
         model_num_poses = poses.shape[1]
         simulation_num_poses = scorer.proposal_sampling.num_poses
         observation_indices = temporal_sampling_indices(

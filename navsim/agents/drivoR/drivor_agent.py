@@ -253,7 +253,7 @@ class DrivoRAgent(AbstractAgent):
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return self._drivor_model(features)
 
-    def compute_score(self, targets, proposals, test=True):
+    def compute_score(self, targets, proposals, test=True, return_clearance=False):
         if self.training:
             metric_cache_paths = self.train_metric_cache_paths
             metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic
@@ -270,6 +270,7 @@ class DrivoRAgent(AbstractAgent):
                 "token": metric_cache_paths[token] if token in metric_cache_paths else metric_cache_paths_synthetic[token],
                 "poses": poses,
                 "test": test,
+                "return_clearance": return_clearance,
                 "clearance_clip_min": self._config.clearance_clip_min,
                 "clearance_clip_max": self._config.clearance_clip_max,
             }
@@ -289,6 +290,12 @@ class DrivoRAgent(AbstractAgent):
 
         if test:
             l2_2s = torch.linalg.norm(proposals[:, 0] - target_trajectory, dim=-1)[:, :4]
+
+            if return_clearance:
+                clearance_targets = torch.FloatTensor(
+                    np.stack([res[4] for res in all_res])
+                ).to(proposals.device)
+                return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0], clearance_targets
 
             return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0]
         else:

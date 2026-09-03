@@ -66,11 +66,12 @@ The clearance loss weights distance regression by
 without discarding far-safe samples. Collision-sign classification is derived
 directly from `-pred_clearance / temperature`; collision, near-collision, and
 far-safe samples use configurable weights of `5.0`, `2.0`, and `0.25` by
-default. Training logs include batch-level
-`collision_positive_ratio`, `collision_precision`, `collision_recall`,
-`collision_auprc`, `clearance_sign_accuracy`, `clearance_mae_collision`, and
-`clearance_mae_near`. Batch AUPRC is intended for training diagnostics rather
-than an exact dataset-level AUPRC.
+default. Training logs include `collision_positive_ratio`,
+`collision_precision`, `collision_recall`, `clearance_sign_accuracy`,
+`clearance_mae_collision`, and `clearance_mae_near`. The more expensive
+`collision_auprc` is computed only during validation. It is aggregated from
+per-batch values and is intended as a diagnostic rather than an exact
+dataset-level AUPRC.
 
 The scorer settings live in
 `navsim/planning/script/config/common/agent/drivoR.yaml`. Important overrides

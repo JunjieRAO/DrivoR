@@ -71,7 +71,9 @@ class AgentLightningModule(pl.LightningModule):
             all_chosen_trajectories = predictions["trajectory"][:,None]
             all_proposed_trajectories = predictions["proposals"]
             final_score, fake_best_score, proposal_scores, l2, trajectoy_scores = self.agent.compute_score(targets, all_chosen_trajectories)
-            _, best_score, all_proposal_scores, _, _ = self.agent.compute_score(targets, all_proposed_trajectories)
+            _, best_score, all_proposal_scores, _, _, clearance_targets = self.agent.compute_score(
+                targets, all_proposed_trajectories, return_clearance=True
+            )
             mean_score=proposal_scores.mean()
 
             logging_prefix="val"
@@ -94,6 +96,18 @@ class AgentLightningModule(pl.LightningModule):
                 top_5_indices_real = torch.topk(all_proposal_scores, k=5, dim=1).indices
                 top_5_score_hit_rate = _rowwise_isin(best_pred_score_index, top_5_indices_real).mean(dtype=torch.float32)
                 self.log(f"{logging_prefix}/top_5_score_hit_rate", top_5_score_hit_rate, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+                collision_auprc = self.agent.loss.clearance_metrics(
+                    predictions["pred_clearance"], clearance_targets, include_auprc=True
+                )["collision_auprc"]
+                self.log(
+                    f"{logging_prefix}/collision_auprc",
+                    collision_auprc,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                    sync_dist=True,
+                )
             
             self.log(f"{logging_prefix}/score", final_score, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             self.log(f"{logging_prefix}/best_score", best_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)

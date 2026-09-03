@@ -212,7 +212,7 @@ class DrivoRLoss(torch.nn.Module):
         return (point_loss * weights).sum() / weights.sum().clamp(min=1.0)
 
     @torch.no_grad()
-    def clearance_metrics(self, prediction, target):
+    def clearance_metrics(self, prediction, target, include_auprc=False):
         target = target.to(prediction.dtype).clamp(
             self.clearance_clip_min, self.clearance_clip_max
         )
@@ -225,34 +225,37 @@ class DrivoRLoss(torch.nn.Module):
         collision_precision = true_positive / predicted_positive.clamp(min=1.0)
         collision_recall = true_positive / positive.clamp(min=1.0)
 
-        scores = (-prediction / self.collision_sign_temperature).flatten()
-        labels = collision_target.flatten()
-        order = torch.argsort(scores, descending=True)
-        sorted_labels = labels[order].float()
-        cumulative_positive = sorted_labels.cumsum(dim=0)
-        ranks = torch.arange(
-            1, sorted_labels.numel() + 1, device=prediction.device, dtype=prediction.dtype
-        )
-        precision_at_rank = cumulative_positive / ranks
-        collision_auprc = (
-            (precision_at_rank * sorted_labels).sum() / positive.clamp(min=1.0)
-        )
-
         absolute_error = (prediction - target).abs()
         near_mask = target < self.collision_near_threshold
         collision_mae = (absolute_error * collision_target).sum() / positive.clamp(min=1.0)
         near_count = near_mask.sum().float()
         near_mae = (absolute_error * near_mask).sum() / near_count.clamp(min=1.0)
 
-        return {
+        metrics = {
             "collision_positive_ratio": collision_target.float().mean(),
             "collision_precision": collision_precision,
             "collision_recall": collision_recall,
-            "collision_auprc": collision_auprc,
             "clearance_sign_accuracy": (collision_prediction == collision_target).float().mean(),
             "clearance_mae_collision": collision_mae,
             "clearance_mae_near": near_mae,
         }
+        if include_auprc:
+            scores = (-prediction / self.collision_sign_temperature).flatten()
+            labels = collision_target.flatten()
+            order = torch.argsort(scores, descending=True)
+            sorted_labels = labels[order].float()
+            cumulative_positive = sorted_labels.cumsum(dim=0)
+            ranks = torch.arange(
+                1,
+                sorted_labels.numel() + 1,
+                device=prediction.device,
+                dtype=prediction.dtype,
+            )
+            precision_at_rank = cumulative_positive / ranks
+            metrics["collision_auprc"] = (
+                (precision_at_rank * sorted_labels).sum() / positive.clamp(min=1.0)
+            )
+        return metrics
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,

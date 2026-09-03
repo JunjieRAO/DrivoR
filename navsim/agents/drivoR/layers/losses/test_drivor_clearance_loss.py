@@ -61,7 +61,7 @@ def test_clearance_metrics_match_known_predictions() -> None:
     prediction = torch.tensor([[[-0.5, 0.2, -0.1, 3.0]]])
     target = torch.tensor([[[-0.5, -0.2, 0.5, 2.0]]])
 
-    metrics = loss_fn.clearance_metrics(prediction, target)
+    metrics = loss_fn.clearance_metrics(prediction, target, include_auprc=True)
 
     assert torch.allclose(metrics["collision_positive_ratio"], torch.tensor(0.5))
     assert torch.allclose(metrics["collision_precision"], torch.tensor(0.5))
@@ -121,5 +121,5 @@ def test_loss_forward_consumes_clearance_targets() -> None:
     assert torch.isfinite(loss_dict["clearance_loss"])
     assert torch.isfinite(loss_dict["collision_sign_loss"])
     assert "collision_positive_ratio" in loss_dict
-    assert "collision_auprc" in loss_dict
+    assert "collision_auprc" not in loss_dict
     assert pred_clearance.grad is not None

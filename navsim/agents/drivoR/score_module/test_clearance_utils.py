@@ -4,9 +4,13 @@ from shapely.affinity import rotate
 from shapely.geometry import box
 
 from navsim.agents.drivoR.score_module.clearance_utils import (
+    compute_temporal_clearance_targets,
     minimum_signed_clearance,
     signed_polygon_clearance,
     temporal_sampling_indices,
+)
+from navsim.planning.simulation.planner.pdm_planner.observation.pdm_occupancy_map import (
+    PDMOccupancyMap,
 )
 
 
@@ -48,3 +52,38 @@ def test_temporal_sampling_indices_align_model_and_simulation() -> None:
 
     with pytest.raises(ValueError, match="Cannot align"):
         temporal_sampling_indices(40, 6)
+
+
+def test_temporal_targets_query_nearby_objects_and_exclude_red_lights() -> None:
+    class Observation:
+        red_light_token = "red_light"
+
+        def __init__(self):
+            self.maps = {
+                5: PDMOccupancyMap(
+                    ["near", "far", "red_light_lane"],
+                    np.asarray(
+                        [
+                            box(2.5, 0.0, 3.5, 1.0),
+                            box(20.0, 0.0, 21.0, 1.0),
+                            box(0.25, 0.25, 0.75, 0.75),
+                        ],
+                        dtype=object,
+                    ),
+                )
+            }
+
+        def __getitem__(self, index):
+            return self.maps[index]
+
+    ego_polygons = np.asarray(
+        [[box(0.0, 0.0, 1.0, 1.0)], [box(2.75, 0.0, 3.75, 1.0)]], dtype=object
+    )
+
+    targets = compute_temporal_clearance_targets(
+        ego_polygons, Observation(), -1.0, 5.0, [5]
+    )
+
+    assert targets.shape == (2, 1)
+    assert targets[0, 0] == pytest.approx(1.5)
+    assert targets[1, 0] < 0.0

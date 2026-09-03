@@ -2,6 +2,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 import numpy.typing as npt
+import shapely
 from shapely.geometry import Polygon
 
 
@@ -92,17 +93,38 @@ def compute_temporal_clearance_targets(
 
     for time_idx, observation_idx in enumerate(observation_indices):
         occupancy_map = observation[observation_idx]
-        object_polygons = [
-            occupancy_map[token]
-            for token in occupancy_map.tokens
-            if not token.startswith(red_light_prefix)
-        ]
-        if not object_polygons:
+        timestep_ego_polygons = ego_polygons[:, time_idx]
+        pair_indices = occupancy_map.query(
+            timestep_ego_polygons, predicate="dwithin", distance=clip_max
+        )
+        if pair_indices.shape[1] == 0:
             continue
 
-        for proposal_idx in range(num_proposals):
-            targets[proposal_idx, time_idx] = minimum_signed_clearance(
-                ego_polygons[proposal_idx, time_idx], object_polygons, clip_max
+        proposal_indices, object_indices = pair_indices
+        real_object_mask = np.asarray(
+            [
+                not occupancy_map.tokens[object_idx].startswith(red_light_prefix)
+                for object_idx in object_indices
+            ],
+            dtype=np.bool_,
+        )
+        proposal_indices = proposal_indices[real_object_mask]
+        object_indices = object_indices[real_object_mask]
+        if proposal_indices.size == 0:
+            continue
+
+        paired_ego = timestep_ego_polygons[proposal_indices]
+        paired_objects = np.asarray(occupancy_map.geometries, dtype=object)[object_indices]
+        pair_clearances = np.asarray(
+            shapely.distance(paired_ego, paired_objects), dtype=np.float64
+        )
+        intersecting = np.asarray(
+            shapely.intersects(paired_ego, paired_objects), dtype=np.bool_
+        )
+        for pair_idx in np.flatnonzero(intersecting):
+            pair_clearances[pair_idx] = -_penetration_depth(
+                paired_ego[pair_idx], paired_objects[pair_idx]
             )
+        np.minimum.at(targets[:, time_idx], proposal_indices, pair_clearances)
 
     return np.clip(targets, clip_min, clip_max)

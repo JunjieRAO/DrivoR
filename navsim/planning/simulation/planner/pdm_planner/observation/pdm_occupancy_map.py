@@ -81,6 +81,11 @@ class PDMOccupancyMap:
         """
         return self._token_to_idx
 
+    @property
+    def geometries(self) -> npt.NDArray[np.object_]:
+        """Getter for geometries in STRtree index order."""
+        return self._geometries
+
     def intersects(self, geometry: Geometry) -> List[str]:
         """
         Searches for intersecting geometries in the occupancy map
@@ -90,14 +95,14 @@ class PDMOccupancyMap:
         indices = self.query(geometry, predicate="intersects")
         return [self._tokens[idx] for idx in indices]
 
-    def query(self, geometry: Geometry, predicate=None):
+    def query(self, geometry: Geometry, predicate=None, distance=None):
         """
         Function to directly calls shapely's query function on str-tree
         :param geometry: geometries to query
         :param predicate: see shapely, defaults to None
         :return: query output
         """
-        return self._str_tree.query(geometry, predicate=predicate)
+        return self._str_tree.query(geometry, predicate=predicate, distance=distance)
 
 
 class PDMDrivableMap(PDMOccupancyMap):
