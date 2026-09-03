@@ -5,12 +5,12 @@ REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
 IMAGE_BACKBONE_CHECKPOINT="${IMAGE_BACKBONE_CHECKPOINT:-/mnt/workspace/roa7sgh/DrivoR/weights/drivor_Nav1_25epochs.pth}"
 LIDAR_BACKBONE_CHECKPOINT="${LIDAR_BACKBONE_CHECKPOINT:-}"
-TRAIN_METRIC_CACHE_PATH="${TRAIN_METRIC_CACHE_PATH:-/mnt/workspace/hru4sgh/NAVSIM/dataset/matric_cache/metric_cache_navtrain}"
-GPU_IDS="${GPU_IDS:-0}"
+TRAIN_METRIC_CACHE_PATH="${TRAIN_METRIC_CACHE_PATH:-/mnt/workspace/roa7sgh/DrivoR/dataset/train_metric_cache_navtrain}"
+GPU_IDS="${GPU_IDS:-0,1,2,3}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 MAX_EPOCHS="${MAX_EPOCHS:-25}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-drivoR_nav1_frozen_backbones}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-nav1_frozen_backbones_rank_weight}"
 
 if [[ ! -f "$IMAGE_BACKBONE_CHECKPOINT" ]]; then
   echo "[ERROR] Image backbone checkpoint not found: $IMAGE_BACKBONE_CHECKPOINT" >&2

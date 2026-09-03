@@ -13,10 +13,11 @@ python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" 
   worker.threads_per_node=16 \
   train_test_split=navtest \
   agent=drivoR \
-  agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/weights/drivor_Nav1_25epochs.pth" \
-  experiment_name=drivoR_nav1_eval \
+  agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/exp/ke/nav1_frozen_backbones_rank_weight/09.02_09.38/lightning_logs/version_0/checkpoints/best-epoch20-step33873.ckpt" \
+  experiment_name=nav1_frozen_backbones_rank_weight_eval \
   evaluate_all_proposals=true \
   +trainer.params.devices=1 \
+  trainer.params.strategy=auto \
   metric_cache_path="/mnt/workspace/hru4sgh/NAVSIM/dataset/matric_cache/metric_cache_navtest" \
   agent.config.proposal_num=64 \
   agent.config.refiner_ls_values=0.0 \
