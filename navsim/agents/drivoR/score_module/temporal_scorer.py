@@ -129,7 +129,9 @@ class TemporalRiskScorer(nn.Module):
             torch.logsumexp(risk / temperature, dim=-1) - math.log(risk.shape[-1])
         )
 
-    def _build_pose_features(self, proposals: torch.Tensor) -> torch.Tensor:
+    def _build_pose_features(
+        self, proposals: torch.Tensor, current_velocity: torch.Tensor
+    ) -> torch.Tensor:
         position = proposals[..., :2]
         yaw = proposals[..., 2:3]
 
@@ -138,8 +140,11 @@ class TemporalRiskScorer(nn.Module):
         )
         velocity = (position - previous_position) / self.pose_interval
 
+        initial_velocity = current_velocity[:, None, None, :].expand(
+            -1, proposals.shape[1], -1, -1
+        )
         previous_velocity = torch.cat(
-            (velocity[..., :1, :], velocity[..., :-1, :]), dim=-2
+            (initial_velocity, velocity[..., :-1, :]), dim=-2
         )
         acceleration = (velocity - previous_velocity) / self.pose_interval
 
@@ -166,6 +171,7 @@ class TemporalRiskScorer(nn.Module):
         proposals: torch.Tensor,
         scene_features: torch.Tensor,
         ego_token: torch.Tensor,
+        current_velocity: torch.Tensor,
     ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         batch_size, proposal_num, num_poses, _ = proposals.shape
         if num_poses != self.num_poses:
@@ -184,8 +190,13 @@ class TemporalRiskScorer(nn.Module):
                 f"Expected ego_token shape {(batch_size, 1, self.d_model)}, "
                 f"got {tuple(ego_token.shape)}."
             )
+        if current_velocity.shape != (batch_size, 2):
+            raise ValueError(
+                f"Expected current_velocity shape {(batch_size, 2)}, "
+                f"got {tuple(current_velocity.shape)}."
+            )
 
-        pose_features = self._build_pose_features(proposals)
+        pose_features = self._build_pose_features(proposals, current_velocity)
         tokens = self.pose_encoder(pose_features)
         tokens = tokens + self.temporal_embedding + ego_token[:, None, :, :]
         tokens = tokens.reshape(batch_size * proposal_num, num_poses, -1)

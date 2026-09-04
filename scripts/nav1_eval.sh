@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-cd /mnt/workspace/roa7sgh/DrivoR
-export PYTHONPATH=/mnt/workspace/roa7sgh/DrivoR:$PYTHONPATH
+REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
+GPU_IDS="${GPU_IDS:-0,1,2,3}"
+GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-16}"
+DATALOADER_WORKERS="${DATALOADER_WORKERS:-8}"
+SCORING_WORKERS="${SCORING_WORKERS:-64}"
+
+cd "$REPO_ROOT"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+export CUDA_VISIBLE_DEVICES="$GPU_IDS"
 export NUPLAN_MAP_VERSION=nuplan-maps-v1.0
 export NUPLAN_MAPS_ROOT=/mnt/workspace/hru4sgh/NAVSIM/dataset/maps
-export NAVSIM_DEVKIT_ROOT=/mnt/workspace/roa7sgh/DrivoR
+export NAVSIM_DEVKIT_ROOT="$REPO_ROOT"
 export OPENSCENE_DATA_ROOT=/mnt/workspace/hru4sgh/NAVSIM/dataset
-export NAVSIM_EXP_ROOT=/mnt/workspace/roa7sgh/DrivoR/exp
+export NAVSIM_EXP_ROOT="$REPO_ROOT/exp"
 export SUBSCORE_PATH="$NAVSIM_EXP_ROOT"
 
 python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" \
-  worker.threads_per_node=16 \
+  worker.threads_per_node="$SCORING_WORKERS" \
   train_test_split=navtest \
   agent=drivoR \
   agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/exp/ke/nav1_frozen_backbones_rank_weight/09.02_09.38/lightning_logs/version_0/checkpoints/best-epoch20-step33873.ckpt" \
   experiment_name=nav1_frozen_backbones_rank_weight_eval \
   evaluate_all_proposals=true \
-  +trainer.params.devices=1 \
-  trainer.params.strategy=auto \
+  +trainer.params.devices=4 \
+  trainer.params.strategy=ddp \
+  dataloader.params.batch_size="$GPU_BATCH_SIZE" \
+  dataloader.params.num_workers="$DATALOADER_WORKERS" \
   metric_cache_path="/mnt/workspace/hru4sgh/NAVSIM/dataset/matric_cache/metric_cache_navtest" \
   agent.config.proposal_num=64 \
   agent.config.refiner_ls_values=0.0 \

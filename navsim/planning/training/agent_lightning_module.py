@@ -97,17 +97,18 @@ class AgentLightningModule(pl.LightningModule):
                 top_5_score_hit_rate = _rowwise_isin(best_pred_score_index, top_5_indices_real).mean(dtype=torch.float32)
                 self.log(f"{logging_prefix}/top_5_score_hit_rate", top_5_score_hit_rate, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
-                collision_auprc = self.agent.loss.clearance_metrics(
+                clearance_metrics = self.agent.loss.clearance_metrics(
                     predictions["pred_clearance"], clearance_targets, include_auprc=True
-                )["collision_auprc"]
-                self.log(
-                    f"{logging_prefix}/collision_auprc",
-                    collision_auprc,
-                    on_step=False,
-                    on_epoch=True,
-                    prog_bar=True,
-                    sync_dist=True,
                 )
+                for metric_name, metric_value in clearance_metrics.items():
+                    self.log(
+                        f"{logging_prefix}/{metric_name}",
+                        metric_value,
+                        on_step=False,
+                        on_epoch=True,
+                        prog_bar=True,
+                        sync_dist=True,
+                    )
             
             self.log(f"{logging_prefix}/score", final_score, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             self.log(f"{logging_prefix}/best_score", best_score, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)

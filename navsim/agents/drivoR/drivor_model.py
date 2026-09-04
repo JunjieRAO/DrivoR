@@ -108,10 +108,11 @@ class DrivoRModel(nn.Module):
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         
         # ego status and initial traj tokens
+        current_ego_status: torch.Tensor = features["ego_status"][:, -1]
         if self._config.full_history_status:
             ego_status: torch.Tensor = features["ego_status"].flatten(-2)
         else:
-            ego_status: torch.Tensor = features["ego_status"][:, -1]
+            ego_status = current_ego_status
         
         ego_token = self.hist_encoding(ego_status)[:, None]
         log.debug(f"Ego features - {ego_token.shape}")
@@ -176,7 +177,7 @@ class DrivoRModel(nn.Module):
         B,N,_,_=proposals.shape
 
         pred_logit, pred_clearance = self.scorer(
-            proposals.detach(), scene_features, ego_token
+            proposals.detach(), scene_features, ego_token, current_ego_status[:, 3:5]
         )
 
         output["pred_logit"]=pred_logit

@@ -91,11 +91,11 @@ config:
   bev_agent: false
   refiner_num_heads: 1
   refiner_ls_values: 0.0
-  temporal_scorer_num_layers: 2
-  scene_scorer_num_layers: 2
+  temporal_scorer_num_layers: 3
+  scene_scorer_num_layers: 4
   temporal_scorer_num_heads: 4
   temporal_scorer_dropout: 0.1
-  nc_risk_pool_temperature: 0.5
+  nc_risk_pool_temperature: 0.35
   ttc_risk_pool_temperature: 0.5
   clearance_clip_min: -1.0
   clearance_clip_max: 5.0
@@ -120,11 +120,11 @@ loss:
   agent_class_weight: 1.0
   agent_box_weight: 0.1
   bev_semantic_weight: 1.0
-  clearance_weight: 0.2
+  clearance_weight: 0.3
   clearance_clip_min: ${agent.config.clearance_clip_min}
   clearance_clip_max: ${agent.config.clearance_clip_max}
   clearance_far_weight: 0.25
-  clearance_near_alpha: 1.75
+  clearance_near_alpha: 2.5
   clearance_near_tau: 1.0
   collision_sign_weight: 0.2
   collision_sign_temperature: 0.25
@@ -143,11 +143,11 @@ freeze_lidar_backbone: false
 train_metric_cache_path: ''
 lr_args: 
   name: AdamW
-  base_lr: 5e-4
+  base_lr: 2e-4
   base_batch_size: 64
 scheduler_args: 
   num_epochs: ${trainer.params.max_epochs}
-  dataset_size: 85000 # for navsim
+  dataset_size: 103288 # 85000 # for navsim
 
 batch_size: ${dataloader.params.batch_size}
 num_gpus: 1 # the batchsize is per gpu --> need to update for steps
