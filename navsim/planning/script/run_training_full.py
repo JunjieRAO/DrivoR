@@ -40,10 +40,9 @@ def build_datasets(cfg: DictConfig, agent: AbstractAgent) -> Tuple[Dataset, Data
     train_scene_filter: SceneFilter = instantiate(cfg.train_test_split.scene_filter)
     if train_scene_filter.log_names is not None:
         train_scene_filter.log_names = [
-            log_name for log_name in train_scene_filter.log_names if log_name in cfg.train_logs or log_name in cfg.val_logs 
-        ]
+            log_name for log_name in train_scene_filter.log_names if log_name in cfg.train_logs ]
     else:
-        train_scene_filter.log_names = cfg.train_logs + cfg.val_logs
+        train_scene_filter.log_names = cfg.train_logs
     
 
     print("len(train_scene_filter.log_names) ", len(train_scene_filter.log_names))

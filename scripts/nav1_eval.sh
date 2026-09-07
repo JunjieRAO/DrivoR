@@ -5,7 +5,7 @@ REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-16}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-8}"
-SCORING_WORKERS="${SCORING_WORKERS:-64}"
+SCORING_WORKERS="${SCORING_WORKERS:-60}"
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
@@ -21,8 +21,8 @@ python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" 
   worker.threads_per_node="$SCORING_WORKERS" \
   train_test_split=navtest \
   agent=drivoR \
-  agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/exp/ke/nav1_frozen_backbones_rank_weight/09.02_09.38/lightning_logs/version_0/checkpoints/best-epoch20-step33873.ckpt" \
-  experiment_name=nav1_frozen_backbones_rank_weight_eval \
+  agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/exp/ke/nav1_from_scratch/09.04_21.33/lightning_logs/version_0/checkpoints/best-epoch23-step38712.ckpt" \
+  experiment_name=nav1_from_scratch_eval \
   evaluate_all_proposals=true \
   +trainer.params.devices=4 \
   trainer.params.strategy=ddp \

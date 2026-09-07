@@ -295,7 +295,10 @@ class DrivoRAgent(AbstractAgent):
                 clearance_targets = torch.FloatTensor(
                     np.stack([res[4] for res in all_res])
                 ).to(proposals.device)
-                return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0], clearance_targets
+                at_fault_timestep_targets = torch.FloatTensor(
+                    np.stack([res[5] for res in all_res])
+                ).to(proposals.device)
+                return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0], clearance_targets, at_fault_timestep_targets
 
             return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0]
         else:
@@ -307,7 +310,11 @@ class DrivoRAgent(AbstractAgent):
 
             clearance_targets = torch.FloatTensor(np.stack([res[4] for res in all_res])).to(proposals.device)
 
-            return final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas, clearance_targets
+            at_fault_timestep_targets = torch.FloatTensor(
+                np.stack([res[5] for res in all_res])
+            ).to(proposals.device)
+
+            return final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas, clearance_targets, at_fault_timestep_targets
 
     def compute_loss(
             self,

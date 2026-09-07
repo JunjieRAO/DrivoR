@@ -144,6 +144,8 @@ class DrivoRLoss(torch.nn.Module):
                         collision_near_weight: float = 2.0,
                         collision_far_weight: float = 0.25,
                         collision_near_threshold: float = 1.0,
+                        at_fault_timestep_weight: float = 0.1,
+                        at_fault_timestep_pos_weight: float = 5.0,
                         **kwargs):
         super().__init__()
 
@@ -170,6 +172,8 @@ class DrivoRLoss(torch.nn.Module):
         self.collision_near_weight = collision_near_weight
         self.collision_far_weight = collision_far_weight
         self.collision_near_threshold = collision_near_threshold
+        self.at_fault_timestep_weight = at_fault_timestep_weight
+        self.at_fault_timestep_pos_weight = at_fault_timestep_pos_weight
         if clearance_clip_min >= clearance_clip_max:
             raise ValueError("clearance_clip_min must be smaller than clearance_clip_max.")
         if clearance_near_tau <= 0:
@@ -180,6 +184,8 @@ class DrivoRLoss(torch.nn.Module):
             raise ValueError("collision_sign_temperature must be positive.")
         if min(collision_positive_weight, collision_near_weight, collision_far_weight) < 0:
             raise ValueError("collision sign sample weights must be non-negative.")
+        if at_fault_timestep_weight < 0 or at_fault_timestep_pos_weight <= 0:
+            raise ValueError("at-fault timestep weights must be positive.")
 
     def clearance_loss(self, prediction, target):
         target = target.to(prediction.dtype).clamp(
@@ -210,6 +216,38 @@ class DrivoRLoss(torch.nn.Module):
             collision_logit, collision_target, reduction="none"
         )
         return (point_loss * weights).sum() / weights.sum().clamp(min=1.0)
+
+    def at_fault_timestep_loss(self, prediction, target):
+        target = target.to(prediction.dtype)
+        positive_weight = prediction.new_tensor(self.at_fault_timestep_pos_weight)
+        return F.binary_cross_entropy_with_logits(
+            prediction, target, pos_weight=positive_weight
+        )
+
+    @torch.no_grad()
+    def at_fault_timestep_metrics(self, prediction, target):
+        target = target.to(prediction.dtype)
+        labels = target > 0.5
+        predicted = prediction > 0
+        positive = labels.sum().float()
+        predicted_positive = predicted.sum().float()
+        true_positive = (predicted & labels).sum().float()
+
+        scores = prediction.flatten()
+        sorted_labels = labels.flatten()[torch.argsort(scores, descending=True)].float()
+        precision_at_rank = sorted_labels.cumsum(dim=0) / torch.arange(
+            1,
+            sorted_labels.numel() + 1,
+            device=prediction.device,
+            dtype=prediction.dtype,
+        )
+        auprc = (precision_at_rank * sorted_labels).sum() / positive.clamp(min=1.0)
+        return {
+            "at_fault_timestep_positive_ratio": labels.float().mean(),
+            "at_fault_timestep_precision": true_positive / predicted_positive.clamp(min=1.0),
+            "at_fault_timestep_recall": true_positive / positive.clamp(min=1.0),
+            "at_fault_timestep_auprc": auprc,
+        }
 
     @torch.no_grad()
     def clearance_metrics(self, prediction, target, include_auprc=False):
@@ -354,7 +392,7 @@ class DrivoRLoss(torch.nn.Module):
         proposal_list = pred["proposal_list"]
         target_trajectory = targets["trajectory"]
 
-        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas, gt_clearance = scoring_function(
+        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas, gt_clearance, gt_at_fault_timestep = scoring_function(
             targets, proposals, test=False)
 
         ########
@@ -404,11 +442,19 @@ class DrivoRLoss(torch.nn.Module):
             clearance_metrics = self.clearance_metrics(
                 pred["pred_clearance"], gt_clearance
             )
+            at_fault_timestep_loss = self.at_fault_timestep_loss(
+                pred["pred_nc_timestep_risk"], gt_at_fault_timestep
+            )
+            at_fault_timestep_metrics = self.at_fault_timestep_metrics(
+                pred["pred_nc_timestep_risk"], gt_at_fault_timestep
+            )
         else:
             sub_score_loss = final_score_loss = pred_ce_loss = pred_l1_loss = pred_area_loss = 0
             clearance_loss = 0
             collision_sign_loss = 0
             clearance_metrics = {}
+            at_fault_timestep_loss = 0
+            at_fault_timestep_metrics = {}
 
 
         if pred["agent_states"] is not None:
@@ -435,6 +481,7 @@ class DrivoRLoss(torch.nn.Module):
                 + self.bev_semantic_weight * bev_semantic_loss
                 + self.clearance_weight * clearance_loss
                 + self.collision_sign_weight * collision_sign_loss
+                + self.at_fault_timestep_weight * at_fault_timestep_loss
 
         )
 
@@ -461,6 +508,7 @@ class DrivoRLoss(torch.nn.Module):
             'pred_area_loss': pred_area_loss,
             "clearance_loss": clearance_loss,
             "collision_sign_loss": collision_sign_loss,
+            "at_fault_timestep_loss": at_fault_timestep_loss,
             "inter_loss0": inter_loss0,
             # "inter_loss1": inter_loss1,
             "inter_loss": inter_loss,
@@ -471,5 +519,6 @@ class DrivoRLoss(torch.nn.Module):
             "best_score": best_score
         }
         loss_dict.update(clearance_metrics)
+        loss_dict.update(at_fault_timestep_metrics)
 
         return loss_dict

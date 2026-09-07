@@ -12,7 +12,11 @@ from navsim.planning.simulation.planner.pdm_planner.utils.pdm_enums import (
 )
 import numpy as np
 from .train_pdm_scorer import PDMScorerConfig, PDMScorer
-from .clearance_utils import compute_temporal_clearance_targets, temporal_sampling_indices
+from .clearance_utils import (
+    collision_indices_to_temporal_targets,
+    compute_temporal_clearance_targets,
+    temporal_sampling_indices,
+)
 # from .train_pdm_scorer_v2_dev import PDMScorerConfig, PDMScorer
 
 # metric_cache_loader = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/metric_cache"))
@@ -69,6 +73,7 @@ def get_sub_score(
     )
 
     clearance_targets = None
+    at_fault_timestep_targets = None
     if not test or return_clearance:
         model_num_poses = poses.shape[1]
         simulation_num_poses = scorer.proposal_sampling.num_poses
@@ -81,6 +86,11 @@ def get_sub_score(
             clearance_clip_min,
             clearance_clip_max,
             observation_indices,
+        )
+        at_fault_timestep_targets = collision_indices_to_temporal_targets(
+            scorer._collision_time_idcs,
+            simulation_num_poses,
+            model_num_poses,
         )
 
     num_col=2
@@ -141,4 +151,4 @@ def get_sub_score(
 
         key_agent_corners=key_agent_corners.dot(mat)
 
-    return scores,key_agent_corners,key_agent_labels,ego_areas,clearance_targets
+    return scores,key_agent_corners,key_agent_labels,ego_areas,clearance_targets,at_fault_timestep_targets

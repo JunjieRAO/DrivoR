@@ -3,14 +3,14 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
-TRAIN_METRIC_CACHE_PATH="${TRAIN_METRIC_CACHE_PATH:-$DATA_ROOT/train_metric_cache_navtrain}"
+TRAIN_METRIC_CACHE_PATH="${TRAIN_METRIC_CACHE_PATH:-/mnt/workspace/roa7sgh/DrivoR/dataset/train_metric_cache_navtrain}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 MAX_EPOCHS="${MAX_EPOCHS:-25}"
 BASE_LR="${BASE_LR:-0.0002}"
 SEED="${SEED:-2}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-nav1_from_scratch}"
+EXPERIMENT_NAME="${EXPERIMENT_NAME:-nav1_from_scratch_train}"
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"

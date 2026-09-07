@@ -132,6 +132,8 @@ loss:
   collision_near_weight: 2.0
   collision_far_weight: 0.25
   collision_near_threshold: 1.0
+  at_fault_timestep_weight: 0.1
+  at_fault_timestep_pos_weight: 5.0
   div_weight: 0.0
 
 
@@ -147,7 +149,7 @@ lr_args:
   base_batch_size: 64
 scheduler_args: 
   num_epochs: ${trainer.params.max_epochs}
-  dataset_size: 103288 # 85000 # for navsim
+  dataset_size: 85000  # 103288 # 85000 # for navsim
 
 batch_size: ${dataloader.params.batch_size}
 num_gpus: 1 # the batchsize is per gpu --> need to update for steps

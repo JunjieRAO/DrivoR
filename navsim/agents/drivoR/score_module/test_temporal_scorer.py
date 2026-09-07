@@ -34,11 +34,12 @@ def test_temporal_scorer_shapes_and_gradients() -> None:
     ego_token = torch.randn(2, 1, 32, requires_grad=True)
     current_velocity = torch.randn(2, 2)
 
-    logits, clearance = scorer(
+    logits, clearance, nc_timestep_risk = scorer(
         proposals.detach(), scene, ego_token, current_velocity
     )
 
     assert clearance.shape == (2, 3, 8)
+    assert nc_timestep_risk.shape == (2, 3, 8)
     assert set(logits) == {
         "no_at_fault_collisions",
         "drivable_area_compliance",
@@ -52,12 +53,29 @@ def test_temporal_scorer_shapes_and_gradients() -> None:
         scorer.nc_timestep_risk_head[0].weight
         is not scorer.ttc_timestep_risk_head[0].weight
     )
+    assert scorer.nc_head[0].in_features == 32
+    assert scorer.ttc_head[0].in_features == 32
 
     (clearance.mean() + sum(value.mean() for value in logits.values())).backward()
 
     assert proposals.grad is None
     assert scene.grad is not None and torch.isfinite(scene.grad).all()
     assert ego_token.grad is not None and torch.isfinite(ego_token.grad).all()
+
+
+def test_risk_aware_pooling_keeps_full_feature_dimension() -> None:
+    scorer = TemporalRiskScorer(_config())
+    tokens = torch.arange(24, dtype=torch.float32).reshape(1, 1, 3, 8)
+    risk_logits = torch.tensor([[[0.0, 0.0, 10.0]]])
+
+    features, weights = scorer._risk_aware_feature_pool(
+        tokens, risk_logits, temperature=0.1
+    )
+
+    assert features.shape == (1, 1, 8)
+    assert weights.shape == (1, 1, 3)
+    assert torch.allclose(weights.sum(dim=-1), torch.ones(1, 1))
+    assert torch.allclose(features, tokens[..., -1, :], atol=1e-5)
 
 
 def test_pose_features_include_unscaled_kinematics() -> None:

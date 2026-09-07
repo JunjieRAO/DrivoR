@@ -72,6 +72,23 @@ def test_clearance_metrics_match_known_predictions() -> None:
     assert torch.allclose(metrics["clearance_mae_near"], torch.tensor(1.0 / 3.0))
 
 
+def test_at_fault_timestep_loss_and_metrics() -> None:
+    loss_fn = DrivoRLoss(at_fault_timestep_pos_weight=5.0)
+    prediction = torch.tensor([[[-2.0, 3.0, -1.0, 2.0]]], requires_grad=True)
+    target = torch.tensor([[[0.0, 1.0, 0.0, 0.0]]])
+
+    loss = loss_fn.at_fault_timestep_loss(prediction, target)
+    metrics = loss_fn.at_fault_timestep_metrics(prediction.detach(), target)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert prediction.grad is not None
+    assert torch.allclose(metrics["at_fault_timestep_positive_ratio"], torch.tensor(0.25))
+    assert torch.allclose(metrics["at_fault_timestep_precision"], torch.tensor(0.5))
+    assert torch.allclose(metrics["at_fault_timestep_recall"], torch.tensor(1.0))
+    assert torch.allclose(metrics["at_fault_timestep_auprc"], torch.tensor(1.0))
+
+
 def test_loss_forward_consumes_clearance_targets() -> None:
     loss_fn = DrivoRLoss(inter_weight=0.0, clearance_weight=0.2)
     proposals = torch.randn(1, 2, 8, 3, requires_grad=True)
@@ -91,6 +108,7 @@ def test_loss_forward_consumes_clearance_targets() -> None:
             name: torch.zeros(1, 2, requires_grad=True) for name in metric_names
         },
         "pred_clearance": pred_clearance,
+        "pred_nc_timestep_risk": torch.randn(1, 2, 8, requires_grad=True),
         "pred_logit2": None,
         "pred_agents_states": None,
         "pred_area_logit": None,
@@ -112,6 +130,7 @@ def test_loss_forward_consumes_clearance_targets() -> None:
             torch.zeros(1, dtype=torch.bool),
             torch.zeros(1, dtype=torch.bool),
             torch.zeros_like(pred_clearance),
+            torch.zeros_like(pred_clearance),
         )
 
     loss_dict = loss_fn(targets, predictions, None, scoring_function)
@@ -120,6 +139,8 @@ def test_loss_forward_consumes_clearance_targets() -> None:
     assert torch.isfinite(loss_dict["loss"])
     assert torch.isfinite(loss_dict["clearance_loss"])
     assert torch.isfinite(loss_dict["collision_sign_loss"])
+    assert torch.isfinite(loss_dict["at_fault_timestep_loss"])
+    assert "at_fault_timestep_positive_ratio" in loss_dict
     assert "collision_positive_ratio" in loss_dict
     assert "collision_auprc" not in loss_dict
     assert pred_clearance.grad is not None

@@ -71,7 +71,7 @@ class AgentLightningModule(pl.LightningModule):
             all_chosen_trajectories = predictions["trajectory"][:,None]
             all_proposed_trajectories = predictions["proposals"]
             final_score, fake_best_score, proposal_scores, l2, trajectoy_scores = self.agent.compute_score(targets, all_chosen_trajectories)
-            _, best_score, all_proposal_scores, _, _, clearance_targets = self.agent.compute_score(
+            _, best_score, all_proposal_scores, _, _, clearance_targets, at_fault_timestep_targets = self.agent.compute_score(
                 targets, all_proposed_trajectories, return_clearance=True
             )
             mean_score=proposal_scores.mean()
@@ -101,6 +101,19 @@ class AgentLightningModule(pl.LightningModule):
                     predictions["pred_clearance"], clearance_targets, include_auprc=True
                 )
                 for metric_name, metric_value in clearance_metrics.items():
+                    self.log(
+                        f"{logging_prefix}/{metric_name}",
+                        metric_value,
+                        on_step=False,
+                        on_epoch=True,
+                        prog_bar=True,
+                        sync_dist=True,
+                    )
+
+                at_fault_timestep_metrics = self.agent.loss.at_fault_timestep_metrics(
+                    predictions["pred_nc_timestep_risk"], at_fault_timestep_targets
+                )
+                for metric_name, metric_value in at_fault_timestep_metrics.items():
                     self.log(
                         f"{logging_prefix}/{metric_name}",
                         metric_value,

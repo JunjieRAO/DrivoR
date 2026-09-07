@@ -20,6 +20,31 @@ def temporal_sampling_indices(
     )
 
 
+def collision_indices_to_temporal_targets(
+    collision_indices: npt.NDArray[np.float64],
+    simulation_num_poses: int,
+    model_num_poses: int,
+) -> npt.NDArray[np.float32]:
+    """Maps each first at-fault collision frame to one model timestep."""
+    if simulation_num_poses % model_num_poses != 0:
+        raise ValueError(
+            f"Cannot align {model_num_poses} model poses with "
+            f"{simulation_num_poses} simulation poses."
+        )
+
+    targets = np.zeros((len(collision_indices), model_num_poses), dtype=np.float32)
+    valid = np.isfinite(collision_indices) & (collision_indices > 0)
+    if not valid.any():
+        return targets
+
+    stride = simulation_num_poses // model_num_poses
+    proposal_indices = np.flatnonzero(valid)
+    timestep_indices = np.ceil(collision_indices[valid] / stride).astype(np.int64) - 1
+    timestep_indices = np.clip(timestep_indices, 0, model_num_poses - 1)
+    targets[proposal_indices, timestep_indices] = 1.0
+    return targets
+
+
 def _polygon_axes(vertices: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     edges = np.roll(vertices, -1, axis=0) - vertices
     axes = np.stack((-edges[:, 1], edges[:, 0]), axis=-1)

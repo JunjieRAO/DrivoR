@@ -176,12 +176,13 @@ class DrivoRModel(nn.Module):
         # scoring
         B,N,_,_=proposals.shape
 
-        pred_logit, pred_clearance = self.scorer(
+        pred_logit, pred_clearance, pred_nc_timestep_risk = self.scorer(
             proposals.detach(), scene_features, ego_token, current_ego_status[:, 3:5]
         )
 
         output["pred_logit"]=pred_logit
         output["pred_clearance"] = pred_clearance
+        output["pred_nc_timestep_risk"] = pred_nc_timestep_risk
         output["pred_logit2"]=None
         output["pred_agents_states"]=None
         output["pred_area_logit"]=None

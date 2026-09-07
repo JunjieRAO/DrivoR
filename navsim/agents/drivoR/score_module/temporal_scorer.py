@@ -99,8 +99,8 @@ class TemporalRiskScorer(nn.Module):
         self.clearance_head = self._head(d_model, d_ffn)
         self.nc_timestep_risk_head = self._head(d_model, d_ffn)
         self.ttc_timestep_risk_head = self._head(d_model, d_ffn)
-        self.nc_head = nn.Linear(1, 1)
-        self.ttc_head = nn.Linear(1, 1)
+        self.nc_head = self._head(d_model, d_ffn)
+        self.ttc_head = self._head(d_model, d_ffn)
 
         self.global_pool_query = nn.Parameter(torch.randn(d_model) * 0.02)
         self.global_heads = nn.ModuleDict(
@@ -124,10 +124,12 @@ class TemporalRiskScorer(nn.Module):
         )
 
     @staticmethod
-    def _risk_pool(risk: torch.Tensor, temperature: float) -> torch.Tensor:
-        return temperature * (
-            torch.logsumexp(risk / temperature, dim=-1) - math.log(risk.shape[-1])
-        )
+    def _risk_aware_feature_pool(
+        tokens: torch.Tensor, risk_logits: torch.Tensor, temperature: float
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        weights = torch.softmax(risk_logits / temperature, dim=-1)
+        features = torch.einsum("bnt,bntd->bnd", weights, tokens)
+        return features, weights
 
     def _build_pose_features(
         self, proposals: torch.Tensor, current_velocity: torch.Tensor
@@ -172,7 +174,7 @@ class TemporalRiskScorer(nn.Module):
         scene_features: torch.Tensor,
         ego_token: torch.Tensor,
         current_velocity: torch.Tensor,
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         batch_size, proposal_num, num_poses, _ = proposals.shape
         if num_poses != self.num_poses:
             raise ValueError(f"Expected {self.num_poses} poses, got {num_poses}.")
@@ -213,12 +215,14 @@ class TemporalRiskScorer(nn.Module):
 
         nc_risk = self.nc_timestep_risk_head(tokens).squeeze(-1)
         ttc_risk = self.ttc_timestep_risk_head(tokens).squeeze(-1)
-        nc_logit = self.nc_head(
-            self._risk_pool(nc_risk, self.nc_temperature).unsqueeze(-1)
-        ).squeeze(-1)
-        ttc_logit = self.ttc_head(
-            self._risk_pool(ttc_risk, self.ttc_temperature).unsqueeze(-1)
-        ).squeeze(-1)
+        nc_feature, _ = self._risk_aware_feature_pool(
+            tokens, nc_risk, self.nc_temperature
+        )
+        ttc_feature, _ = self._risk_aware_feature_pool(
+            tokens, ttc_risk, self.ttc_temperature
+        )
+        nc_logit = self.nc_head(nc_feature).squeeze(-1)
+        ttc_logit = self.ttc_head(ttc_feature).squeeze(-1)
 
         pool_weights = torch.softmax(
             torch.einsum("bntd,d->bnt", tokens, self.global_pool_query)
@@ -233,4 +237,4 @@ class TemporalRiskScorer(nn.Module):
         }
         pred_logit["no_at_fault_collisions"] = nc_logit
         pred_logit["time_to_collision_within_bound"] = ttc_logit
-        return pred_logit, pred_clearance
+        return pred_logit, pred_clearance, nc_risk

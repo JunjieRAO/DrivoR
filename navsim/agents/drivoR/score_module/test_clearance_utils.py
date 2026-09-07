@@ -4,6 +4,7 @@ from shapely.affinity import rotate
 from shapely.geometry import box
 
 from navsim.agents.drivoR.score_module.clearance_utils import (
+    collision_indices_to_temporal_targets,
     compute_temporal_clearance_targets,
     minimum_signed_clearance,
     signed_polygon_clearance,
@@ -52,6 +53,20 @@ def test_temporal_sampling_indices_align_model_and_simulation() -> None:
 
     with pytest.raises(ValueError, match="Cannot align"):
         temporal_sampling_indices(40, 6)
+
+
+def test_collision_indices_map_only_first_at_fault_interval() -> None:
+    collision_indices = np.asarray([np.inf, 1.0, 5.0, 7.0, 40.0])
+
+    targets = collision_indices_to_temporal_targets(collision_indices, 40, 8)
+
+    assert targets.shape == (5, 8)
+    assert targets[0].sum() == 0
+    assert targets[1, 0] == 1
+    assert targets[2, 0] == 1
+    assert targets[3, 1] == 1
+    assert targets[4, 7] == 1
+    assert np.all(targets.sum(axis=1) <= 1)
 
 
 def test_temporal_targets_query_nearby_objects_and_exclude_red_lights() -> None:
