@@ -11,6 +11,13 @@ config:
   proposal_num: 64 # number of proposals (trajectories)
   num_poses: 8 # size if the trajectories
 
+  scorer_augmentation: true
+  scorer_aug_selected_num: 16
+  scorer_aug_variants_num: 4
+  scorer_aug_small_axes: [1.0, 2.0] # lateral, longitudinal (m)
+  scorer_aug_large_axes: [3.0, 5.0] # lateral, longitudinal (m)
+  scorer_aug_min_radius: 0.3
+
   num_scene_tokens: 16 
   one_token_per_traj: true
   full_history_status: false

@@ -114,6 +114,78 @@ class DrivoRModel(nn.Module):
             getattr(self, name).eval()
         return self
 
+    def _augment_scorer_proposals(self, proposals: torch.Tensor) -> torch.Tensor:
+        batch_size, proposal_num, num_poses, _ = proposals.shape
+        selected_num = self._config.scorer_aug_selected_num
+        variants_num = self._config.scorer_aug_variants_num
+        small_axes = proposals.new_tensor(self._config.scorer_aug_small_axes)
+        large_axes = proposals.new_tensor(self._config.scorer_aug_large_axes)
+        min_radius = self._config.scorer_aug_min_radius
+
+        if selected_num > proposal_num:
+            raise ValueError(
+                f"scorer_aug_selected_num ({selected_num}) exceeds proposal count ({proposal_num})"
+            )
+        if variants_num != 4:
+            raise ValueError("stratified scorer augmentation requires scorer_aug_variants_num=4")
+        if small_axes.shape != (2,) or large_axes.shape != (2,):
+            raise ValueError("scorer augmentation axes must contain [lateral, longitudinal]")
+        if not 0 <= min_radius <= 1:
+            raise ValueError("scorer_aug_min_radius must be in [0, 1]")
+
+        dtype = proposals.dtype
+        device = proposals.device
+        progress = torch.arange(1, num_poses + 1, dtype=dtype, device=device) / num_poses
+        smoothstep = (3 * progress.square() - 2 * progress.pow(3))[None, :, None]
+        ego_origin = torch.zeros(1, 2, dtype=dtype, device=device)
+        augmented_batches = []
+
+        with torch.no_grad():
+            for batch_idx in range(batch_size):
+                selected_indices = torch.randperm(proposal_num, device=device)[:selected_num]
+                augmented_groups = []
+
+                for proposal_idx in selected_indices:
+                    proposal = proposals[batch_idx, proposal_idx].detach()
+                    sector_offsets = torch.rand(variants_num, dtype=dtype, device=device)
+                    angles = (
+                        torch.arange(variants_num, dtype=dtype, device=device) + sector_offsets
+                    ) * (2 * torch.pi / variants_num)
+                    radii = min_radius + (1 - min_radius) * torch.rand(
+                        variants_num, dtype=dtype, device=device
+                    )
+                    scale_order = torch.randperm(variants_num, device=device)
+                    axes = torch.empty(variants_num, 2, dtype=dtype, device=device)
+                    axes[scale_order[:2]] = small_axes
+                    axes[scale_order[2:]] = large_axes
+
+                    lateral_offsets = axes[:, 0] * radii * torch.sin(angles)
+                    longitudinal_offsets = axes[:, 1] * radii * torch.cos(angles)
+                    heading = proposal[:, 2]
+                    tangent = torch.stack((torch.cos(heading), torch.sin(heading)), dim=-1)
+                    normal = torch.stack((-torch.sin(heading), torch.cos(heading)), dim=-1)
+                    xy_offsets = (
+                        longitudinal_offsets[:, None, None] * tangent[None]
+                        + lateral_offsets[:, None, None] * normal[None]
+                    )
+
+                    variants = proposal.unsqueeze(0).repeat(variants_num, 1, 1)
+                    variants[..., :2] += smoothstep * xy_offsets
+                    augmented_xy = variants[..., :2]
+                    previous_xy = torch.cat(
+                        (ego_origin.expand(variants_num, -1).unsqueeze(1), augmented_xy[:, :-1]),
+                        dim=1,
+                    )
+                    augmented_steps = augmented_xy - previous_xy
+                    variants[..., 2] = torch.atan2(
+                        augmented_steps[..., 1], augmented_steps[..., 0]
+                    )
+                    augmented_groups.append(variants)
+
+                augmented_batches.append(torch.cat(augmented_groups, dim=0))
+
+        return torch.stack(augmented_batches, dim=0)
+
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         
@@ -179,15 +251,24 @@ class DrivoRModel(nn.Module):
         
 
         output={}
-        output["proposals"] = proposals
         output["proposal_list"] = proposal_list
 
         # scoring
         B,N,_,_=proposals.shape
+        embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())
+        tr_out = self.scorer_attention(embedded_traj, scene_features) + ego_token
 
-        embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
-        tr_out = tr_out+ego_token
+        if self.training and self._config.scorer_augmentation:
+            augmented_proposals = self._augment_scorer_proposals(proposals)
+            augmented_num = augmented_proposals.shape[1]
+            augmented_embeds = self.pos_embed(
+                augmented_proposals.reshape(B, augmented_num, -1)
+            )
+            augmented_out = self.scorer_attention(augmented_embeds, scene_features) + ego_token
+            proposals = torch.cat((proposals, augmented_proposals), dim=1)
+            tr_out = torch.cat((tr_out, augmented_out), dim=1)
+
+        output["proposals"] = proposals
         pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
 
         output["pred_logit"]=pred_logit
@@ -208,7 +289,7 @@ class DrivoRModel(nn.Module):
         )
 
         token = torch.argmax(pdm_score, dim=1)
-        trajectory = proposals[torch.arange(batch_size), token]
+        trajectory = proposals[torch.arange(batch_size, device=proposals.device), token]
 
         output["trajectory"] = trajectory
         output["pdm_score"] = pdm_score

@@ -322,6 +322,19 @@ class DrivoRLoss(torch.nn.Module):
         score = final_scores[np.arange(len(final_scores)), top_proposals].mean()
         best_score = best_scores.mean()
 
+        original_num = proposal_list[-1].shape[1]
+        original_scores = target_scores[:, :original_num]
+        augmented_scores = target_scores[:, original_num:]
+        original_nc_lt1_ratio = (original_scores[..., 0] < 1).float().mean()
+        original_dac_lt1_ratio = (original_scores[..., 1] < 1).float().mean()
+
+        if augmented_scores.shape[1] > 0:
+            augmented_nc_lt1_ratio = (augmented_scores[..., 0] < 1).float().mean()
+            augmented_dac_lt1_ratio = (augmented_scores[..., 1] < 1).float().mean()
+        else:
+            augmented_nc_lt1_ratio = original_nc_lt1_ratio.new_zeros(())
+            augmented_dac_lt1_ratio = original_dac_lt1_ratio.new_zeros(())
+
         [da_loss, ttc_loss, noc_loss, progress_loss, ddc_loss, comfort_loss] = sub_score_loss
 
         loss_dict = {
@@ -345,7 +358,11 @@ class DrivoRLoss(torch.nn.Module):
             # "min_loss1": min_loss1,
             "min_loss": min_loss,
             "score": score,
-            "best_score": best_score
+            "best_score": best_score,
+            "original_nc_lt1_ratio": original_nc_lt1_ratio,
+            "original_dac_lt1_ratio": original_dac_lt1_ratio,
+            "augmented_nc_lt1_ratio": augmented_nc_lt1_ratio,
+            "augmented_dac_lt1_ratio": augmented_dac_lt1_ratio,
         }
 
         return loss_dict
