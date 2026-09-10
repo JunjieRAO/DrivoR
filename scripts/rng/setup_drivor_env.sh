@@ -32,7 +32,7 @@ module load nccl/2.23.4_cuda12.6 || true
 # Activate conda environment.
 # On this cluster, conda may only be available after loading a module.
 if ! command -v conda >/dev/null 2>&1; then
-  module load conda/4.9.2 >/dev/null 2>&1 || module load conda >/dev/null 2>&1 || true
+  module load conda/25.1.1 >/dev/null 2>&1 || module load conda >/dev/null 2>&1 || true
 fi
 
 # Conda's shell hook and `conda activate` reference variables such as $PS1
@@ -75,6 +75,12 @@ export NAVSIM_DEVKIT_ROOT=/home/roa7sgh/DrivoR
 export NAVSIM_EXP_ROOT=/home/roa7sgh/DrivoR/exp
 export SUBSCORE_PATH=$NAVSIM_EXP_ROOT
 mkdir -p "$NAVSIM_EXP_ROOT"
+
+if python -c "import tensorboard" >/dev/null 2>&1; then
+  echo "[TensorBoard] $(python -c 'import tensorboard; print(tensorboard.__version__)')"
+else
+  echo "[WARN] TensorBoard is not installed in the drivoR environment."
+fi
 
 # NAVSIM v1 data readiness check.
 missing=0
