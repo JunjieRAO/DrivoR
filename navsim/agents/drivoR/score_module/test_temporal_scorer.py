@@ -17,8 +17,6 @@ def _config() -> SimpleNamespace:
         temporal_scorer_dropout=0.0,
         temporal_scorer_num_layers=2,
         scene_scorer_num_layers=1,
-        nc_risk_pool_temperature=0.5,
-        ttc_risk_pool_temperature=0.75,
         future_post_fusion_temporal_layers=1,
         future_interval=0.5,
         double_score=False,
@@ -54,6 +52,7 @@ def test_temporal_scorer_shapes_and_gradients() -> None:
     }
     assert all(value.shape == (2, 3) for value in logits.values())
     assert not hasattr(scorer, "ttc_timestep_risk_head")
+    assert scorer.nc_pool_query is not scorer.ttc_pool_query
     assert scorer.dac_pool_query is not scorer.ddc_pool_query
     assert scorer.nc_head[0].in_features == 32
     assert scorer.ttc_head[0].in_features == 32
@@ -65,19 +64,35 @@ def test_temporal_scorer_shapes_and_gradients() -> None:
     assert ego_token.grad is not None and torch.isfinite(ego_token.grad).all()
 
 
-def test_risk_aware_pooling_keeps_full_feature_dimension() -> None:
+def test_metric_query_pooling_keeps_full_feature_dimension() -> None:
     scorer = TemporalRiskScorer(_config())
     tokens = torch.arange(24, dtype=torch.float32).reshape(1, 1, 3, 8)
-    risk_logits = torch.tensor([[[0.0, 0.0, 10.0]]])
+    query = torch.zeros(8)
 
-    features, weights = scorer._risk_aware_feature_pool(
-        tokens, risk_logits, temperature=0.1
-    )
+    features = scorer._metric_query_pool(tokens, query)
 
     assert features.shape == (1, 1, 8)
-    assert weights.shape == (1, 1, 3)
-    assert torch.allclose(weights.sum(dim=-1), torch.ones(1, 1))
-    assert torch.allclose(features, tokens[..., -1, :], atol=1e-5)
+    assert torch.allclose(features, tokens.mean(dim=-2))
+
+
+def test_collision_hazard_does_not_control_subscore_pooling() -> None:
+    scorer = TemporalRiskScorer(_config()).eval()
+    inputs = (
+        torch.randn(1, 2, 8, 3),
+        torch.randn(1, 5, 32),
+        torch.randn(1, 1, 32),
+        torch.randn(1, 2),
+        torch.randn(1, 8, 4, 32),
+    )
+
+    logits_before, _, risk_before = scorer(*inputs)
+    with torch.no_grad():
+        scorer.nc_timestep_risk_head[-1].bias.add_(20.0)
+    logits_after, _, risk_after = scorer(*inputs)
+
+    assert not torch.allclose(risk_before, risk_after)
+    for name in logits_before:
+        assert torch.allclose(logits_before[name], logits_after[name])
 
 
 def test_pose_features_include_unscaled_kinematics() -> None:

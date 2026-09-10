@@ -241,8 +241,8 @@ class DrivoRModel(nn.Module):
         collision_times = torch.arange(
             1,
             self.poses_num + 1,
-            device=collision_hazard.device,
-            dtype=collision_hazard.dtype,
+            device=pred_nc_timestep_risk.device,
+            dtype=pred_nc_timestep_risk.dtype,
         ) * self._config.trajectory_sampling.interval_length
         output["pred_collision_timestamp"] = torch.sum(
             collision_time_probability[..., :-1] * collision_times, dim=-1

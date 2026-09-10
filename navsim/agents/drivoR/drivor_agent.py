@@ -225,6 +225,12 @@ class DrivoRAgent(AbstractAgent):
             if legacy_pool_key in state_dict:
                 legacy_pool_query = state_dict.pop(legacy_pool_key)
                 state_dict.setdefault(
+                    "_drivor_model.scorer.nc_pool_query", legacy_pool_query.clone()
+                )
+                state_dict.setdefault(
+                    "_drivor_model.scorer.ttc_pool_query", legacy_pool_query.clone()
+                )
+                state_dict.setdefault(
                     "_drivor_model.scorer.dac_pool_query", legacy_pool_query.clone()
                 )
                 state_dict.setdefault(
@@ -246,6 +252,8 @@ class DrivoRAgent(AbstractAgent):
                 "_drivor_model.scorer.ego_progress_summary.",
                 "_drivor_model.scorer.comfort_summary.",
                 "_drivor_model.scorer.comfort_kinematics_summary.",
+                "_drivor_model.scorer.nc_pool_query",
+                "_drivor_model.scorer.ttc_pool_query",
                 "_drivor_model.scorer.dac_pool_query",
                 "_drivor_model.scorer.ddc_pool_query",
             )

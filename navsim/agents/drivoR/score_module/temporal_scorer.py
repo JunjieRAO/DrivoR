@@ -98,10 +98,6 @@ class TemporalRiskScorer(nn.Module):
         self.d_model = d_model
         self.pose_interval = config.trajectory_sampling.interval_length
         self.future_interval = config.get("future_interval", self.pose_interval)
-        self.nc_temperature = config.nc_risk_pool_temperature
-        self.ttc_temperature = config.ttc_risk_pool_temperature
-        if self.nc_temperature <= 0 or self.ttc_temperature <= 0:
-            raise ValueError("NC and TTC risk pooling temperatures must be positive.")
         if self.pose_interval <= 0 or self.future_interval <= 0:
             raise ValueError("Trajectory and future sampling intervals must be positive.")
         if self.future_interval != self.pose_interval:
@@ -167,6 +163,8 @@ class TemporalRiskScorer(nn.Module):
         self.nc_head = self._head(d_model, d_ffn)
         self.ttc_head = self._head(d_model, d_ffn)
 
+        self.nc_pool_query = nn.Parameter(torch.randn(d_model) * 0.02)
+        self.ttc_pool_query = nn.Parameter(torch.randn(d_model) * 0.02)
         self.dac_pool_query = nn.Parameter(torch.randn(d_model) * 0.02)
         self.ddc_pool_query = nn.Parameter(torch.randn(d_model) * 0.02)
         self.global_heads = nn.ModuleDict(
@@ -191,14 +189,6 @@ class TemporalRiskScorer(nn.Module):
             nn.ReLU(),
             nn.Linear(d_ffn, 1),
         )
-
-    @staticmethod
-    def _risk_aware_feature_pool(
-        tokens: torch.Tensor, risk_logits: torch.Tensor, temperature: float
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        weights = torch.softmax(risk_logits / temperature, dim=-1)
-        features = torch.einsum("bnt,bntd->bnd", weights, tokens)
-        return features, weights
 
     def _build_pose_features(
         self, proposals: torch.Tensor, current_velocity: torch.Tensor
@@ -340,12 +330,8 @@ class TemporalRiskScorer(nn.Module):
         pred_clearance = self.clearance_head(tokens).squeeze(-1)
 
         nc_risk = self.nc_timestep_risk_head(tokens).squeeze(-1)
-        nc_feature, _ = self._risk_aware_feature_pool(
-            tokens, nc_risk, self.nc_temperature
-        )
-        ttc_feature, _ = self._risk_aware_feature_pool(
-            tokens, nc_risk, self.ttc_temperature
-        )
+        nc_feature = self._metric_query_pool(tokens, self.nc_pool_query)
+        ttc_feature = self._metric_query_pool(tokens, self.ttc_pool_query)
         nc_logit = self.nc_head(nc_feature).squeeze(-1)
         ttc_logit = self.ttc_head(ttc_feature).squeeze(-1)
 
