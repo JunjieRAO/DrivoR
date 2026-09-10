@@ -197,6 +197,8 @@ class DrivoRFeatureBuilder(AbstractFeatureBuilder):
         return {"lidar_feature": torch.tensor(features)}
 
 class DrivoRTargetBuilder(AbstractTargetBuilder):
+    FUTURE_CLASS_IDS = {"vehicle": 0, "pedestrian": 1, "bicycle": 2}
+
     def __init__(self, config: Dict):
         self._config = config
 
@@ -237,13 +239,13 @@ class DrivoRTargetBuilder(AbstractTargetBuilder):
                 trajectory_long = np.stack(traj_, axis=1)
 
                 trajectory_long = torch.tensor(trajectory_long)
-                return {
+                targets = {
                     "trajectory": trajectory,
                     "trajectory_long": trajectory_long,
                     "token":scene.scene_metadata.initial_token
                 }
             except:
-                return {
+                targets = {
                     "trajectory": trajectory,
                     "trajectory_long": trajectory,
                     # "agent_states": agent_states,
@@ -252,14 +254,144 @@ class DrivoRTargetBuilder(AbstractTargetBuilder):
                     "token":scene.scene_metadata.initial_token
                 }
         else:
-
-            return {
+            targets = {
                 "trajectory": trajectory,
                 # "agent_states": agent_states,
                 # "agent_labels": agent_labels,
                 # "bev_semantic_map": bev_semantic_map,
                 "token":scene.scene_metadata.initial_token
             }
+
+        targets.update(self._compute_future_dynamic_targets(scene))
+        return targets
+
+    def _compute_future_dynamic_targets(
+        self, scene: Scene
+    ) -> Dict[str, torch.Tensor]:
+        num_steps = self._config.get("future_num_steps", self._config.num_poses)
+        height = self._config.get("future_occupancy_height", 128)
+        width = self._config.get("future_occupancy_width", 128)
+        blur_sigma = self._config.get("future_occupancy_blur_sigma", 1.0)
+        min_x = self._config.lidar_min_x
+        max_x = self._config.lidar_max_x
+        min_y = self._config.lidar_min_y
+        max_y = self._config.lidar_max_y
+        current_idx = scene.scene_metadata.num_history_frames - 1
+        if current_idx + num_steps >= len(scene.frames):
+            raise ValueError(
+                f"Future occupancy requires {num_steps} future frames, but scene "
+                f"contains only {len(scene.frames) - current_idx - 1}."
+            )
+
+        occupancy = np.zeros((num_steps, 3, height, width), dtype=np.float32)
+        velocity_sum = np.zeros((num_steps, 2, height, width), dtype=np.float32)
+        velocity_weight = np.zeros((num_steps, 1, height, width), dtype=np.float32)
+        valid = np.ones((num_steps, 1, height, width), dtype=np.float32)
+        current_pose = scene.frames[current_idx].ego_status.ego_pose
+
+        for timestep in range(num_steps):
+            frame = scene.frames[current_idx + timestep + 1]
+            frame_pose = frame.ego_status.ego_pose
+            relative_heading = frame_pose[2] - current_pose[2]
+            cos_heading = np.cos(relative_heading)
+            sin_heading = np.sin(relative_heading)
+            rotation = np.array(
+                [[cos_heading, -sin_heading], [sin_heading, cos_heading]],
+                dtype=np.float32,
+            )
+            translation_global = frame_pose[:2] - current_pose[:2]
+            current_cos = np.cos(-current_pose[2])
+            current_sin = np.sin(-current_pose[2])
+            global_to_current = np.array(
+                [[current_cos, -current_sin], [current_sin, current_cos]],
+                dtype=np.float32,
+            )
+            translation = global_to_current @ translation_global
+
+            annotations = frame.annotations
+            for box, name, velocity in zip(
+                annotations.boxes, annotations.names, annotations.velocity_3d
+            ):
+                class_id = self.FUTURE_CLASS_IDS.get(name)
+                if class_id is None:
+                    continue
+                center = rotation @ np.asarray(box[:2], dtype=np.float32) + translation
+                heading = float(box[6] + relative_heading)
+                footprint = self._rasterize_soft_box(
+                    center,
+                    float(box[3]),
+                    float(box[4]),
+                    heading,
+                    height,
+                    width,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                    blur_sigma,
+                )
+                occupancy[timestep, class_id] = np.maximum(
+                    occupancy[timestep, class_id], footprint
+                )
+                local_velocity = rotation @ np.asarray(velocity[:2], dtype=np.float32)
+                velocity_sum[timestep] += local_velocity[:, None, None] * footprint
+                velocity_weight[timestep, 0] += footprint
+
+        velocity = velocity_sum / np.maximum(velocity_weight, 1e-6)
+        return {
+            "future_dynamic_occupancy": torch.from_numpy(occupancy),
+            "future_dynamic_velocity": torch.from_numpy(velocity),
+            "future_dynamic_valid": torch.from_numpy(valid),
+        }
+
+    @staticmethod
+    def _rasterize_soft_box(
+        center: npt.NDArray[np.float32],
+        length: float,
+        width_meters: float,
+        heading: float,
+        height: int,
+        width: int,
+        min_x: float,
+        max_x: float,
+        min_y: float,
+        max_y: float,
+        blur_sigma: float,
+    ) -> npt.NDArray[np.float32]:
+        local_corners = np.array(
+            [
+                [length / 2, width_meters / 2],
+                [length / 2, -width_meters / 2],
+                [-length / 2, -width_meters / 2],
+                [-length / 2, width_meters / 2],
+            ],
+            dtype=np.float32,
+        )
+        cos_heading = np.cos(heading)
+        sin_heading = np.sin(heading)
+        rotation = np.array(
+            [[cos_heading, -sin_heading], [sin_heading, cos_heading]],
+            dtype=np.float32,
+        )
+        corners = local_corners @ rotation.T + center
+        pixels = np.empty_like(corners)
+        pixels[:, 0] = (corners[:, 0] - min_x) * height / (max_x - min_x)
+        pixels[:, 1] = (corners[:, 1] - min_y) * width / (max_y - min_y)
+        polygon = np.stack((pixels[:, 1], pixels[:, 0]), axis=-1)
+        bit_shift = 8
+        polygon = np.round(polygon * (1 << bit_shift)).astype(np.int32)
+        raster = np.zeros((height, width), dtype=np.float32)
+        cv2.fillPoly(
+            raster,
+            [polygon],
+            color=1.0,
+            lineType=cv2.LINE_AA,
+            shift=bit_shift,
+        )
+        if blur_sigma > 0:
+            blurred = cv2.GaussianBlur(raster, (0, 0), sigmaX=blur_sigma)
+            raster = np.maximum(raster, blurred)
+        return np.clip(raster, 0.0, 1.0)
 
     def _compute_agent_targets(self, annotations: Annotations) -> Tuple[torch.Tensor, torch.Tensor]:
         """

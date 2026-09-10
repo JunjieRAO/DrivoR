@@ -3,6 +3,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from .score_module.temporal_scorer import TemporalRiskScorer
+from .score_module.shared_future_predictor import (
+    FutureOccupancyDecoder,
+    SharedFutureLatentPredictor,
+)
 from .transformer_decoder import TransformerDecoder
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
@@ -91,6 +95,22 @@ class DrivoRModel(nn.Module):
 
         # scorer
         self.scorer = TemporalRiskScorer(config)
+        self.future_predictor = SharedFutureLatentPredictor(
+            d_model=config.tf_d_model,
+            num_future_steps=config.get("future_num_steps", config.num_poses),
+            num_slots=config.get("future_num_slots", 8),
+            num_layers=config.get("future_num_layers", 2),
+            num_heads=config.get("future_num_heads", 4),
+            d_ffn=config.tf_d_ffn,
+            dropout=config.temporal_scorer_dropout,
+        )
+        self.future_occupancy_decoder = FutureOccupancyDecoder(
+            d_model=config.tf_d_model,
+            num_slots=config.get("future_num_slots", 8),
+            height=config.get("future_occupancy_height", 128),
+            width=config.get("future_occupancy_width", 128),
+            base_channels=config.get("future_decoder_channels", 64),
+        )
 
         self.b2d=config.b2d
 
@@ -103,6 +123,29 @@ class DrivoRModel(nn.Module):
         for name in self._frozen_backbones:
             getattr(self, name).eval()
         return self
+
+    @staticmethod
+    def collision_time_distribution(
+        timestep_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        collision_hazard = timestep_logits.sigmoid()
+        survival_before = torch.cumprod(
+            torch.cat(
+                (
+                    torch.ones_like(collision_hazard[..., :1]),
+                    1.0 - collision_hazard[..., :-1],
+                ),
+                dim=-1,
+            ),
+            dim=-1,
+        )
+        collision_time_probability = collision_hazard * survival_before
+        no_collision_probability = torch.prod(
+            1.0 - collision_hazard, dim=-1, keepdim=True
+        )
+        return torch.cat(
+            (collision_time_probability, no_collision_probability), dim=-1
+        )
 
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -151,6 +194,10 @@ class DrivoRModel(nn.Module):
 
         scene_features = torch.cat(scene_features, dim=1)
         log.debug(f"Scene features - {scene_features.shape}")
+        future_latents = self.future_predictor(scene_features)
+        pred_future_occupancy, pred_future_velocity = self.future_occupancy_decoder(
+            future_latents
+        )
 
         # initial trajectories
         proposals = self.traj_head[0](traj_tokens).reshape(traj_tokens.shape[0], -1, self.poses_num, self.state_size)
@@ -177,12 +224,32 @@ class DrivoRModel(nn.Module):
         B,N,_,_=proposals.shape
 
         pred_logit, pred_clearance, pred_nc_timestep_risk = self.scorer(
-            proposals.detach(), scene_features, ego_token, current_ego_status[:, 3:5]
+            proposals.detach(),
+            scene_features,
+            ego_token,
+            current_ego_status[:, 3:5],
+            future_latents,
         )
 
         output["pred_logit"]=pred_logit
         output["pred_clearance"] = pred_clearance
         output["pred_nc_timestep_risk"] = pred_nc_timestep_risk
+        collision_time_probability = self.collision_time_distribution(
+            pred_nc_timestep_risk
+        )
+        output["pred_collision_time_probability"] = collision_time_probability
+        collision_times = torch.arange(
+            1,
+            self.poses_num + 1,
+            device=collision_hazard.device,
+            dtype=collision_hazard.dtype,
+        ) * self._config.trajectory_sampling.interval_length
+        output["pred_collision_timestamp"] = torch.sum(
+            collision_time_probability[..., :-1] * collision_times, dim=-1
+        )
+        output["future_latents"] = future_latents
+        output["pred_future_occupancy"] = pred_future_occupancy
+        output["pred_future_velocity"] = pred_future_velocity
         output["pred_logit2"]=None
         output["pred_agents_states"]=None
         output["pred_area_logit"]=None

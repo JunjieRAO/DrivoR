@@ -91,12 +91,22 @@ config:
   bev_agent: false
   refiner_num_heads: 1
   refiner_ls_values: 0.0
-  temporal_scorer_num_layers: 3
-  scene_scorer_num_layers: 4
+  temporal_scorer_num_layers: 2
+  scene_scorer_num_layers: 2
   temporal_scorer_num_heads: 4
   temporal_scorer_dropout: 0.1
   nc_risk_pool_temperature: 0.35
   ttc_risk_pool_temperature: 0.5
+  future_num_steps: 8
+  future_interval: 0.5
+  future_num_slots: 8
+  future_num_layers: 2
+  future_num_heads: 4
+  future_post_fusion_temporal_layers: 1
+  future_occupancy_height: 128
+  future_occupancy_width: 128
+  future_decoder_channels: 64
+  future_occupancy_blur_sigma: 1.0
   clearance_clip_min: -1.0
   clearance_clip_max: 5.0
   
@@ -134,6 +144,11 @@ loss:
   collision_near_threshold: 1.0
   at_fault_timestep_weight: 0.1
   at_fault_timestep_pos_weight: 5.0
+  future_loss_weight: 0.2
+  future_velocity_weight: 0.1
+  future_focal_gamma: 2.0
+  future_occupancy_pos_weight: 5.0
+  future_velocity_occupancy_threshold: 0.1
   div_weight: 0.0
 
 

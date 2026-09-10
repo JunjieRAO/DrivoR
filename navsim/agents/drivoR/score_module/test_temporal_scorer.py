@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
+import torch.nn as nn
 
 from navsim.agents.drivoR.score_module.temporal_scorer import TemporalRiskScorer
 
@@ -17,6 +19,8 @@ def _config() -> SimpleNamespace:
         scene_scorer_num_layers=1,
         nc_risk_pool_temperature=0.5,
         ttc_risk_pool_temperature=0.75,
+        future_post_fusion_temporal_layers=1,
+        future_interval=0.5,
         double_score=False,
         agent_pred=False,
         area_pred=False,
@@ -49,10 +53,8 @@ def test_temporal_scorer_shapes_and_gradients() -> None:
         "comfort",
     }
     assert all(value.shape == (2, 3) for value in logits.values())
-    assert (
-        scorer.nc_timestep_risk_head[0].weight
-        is not scorer.ttc_timestep_risk_head[0].weight
-    )
+    assert not hasattr(scorer, "ttc_timestep_risk_head")
+    assert scorer.dac_pool_query is not scorer.ddc_pool_query
     assert scorer.nc_head[0].in_features == 32
     assert scorer.ttc_head[0].in_features == 32
 
@@ -117,4 +119,83 @@ def test_first_acceleration_uses_current_ego_velocity() -> None:
 
     assert torch.allclose(features[..., 0, 6], torch.tensor([[2.0]]))
     assert torch.allclose(features[..., 1:, 6:8], torch.zeros(1, 1, 7, 2))
+
+
+def test_time_aligned_future_fusion_shapes_and_gradients() -> None:
+    scorer = TemporalRiskScorer(_config())
+    proposals = torch.randn(2, 3, 8, 3)
+    scene = torch.randn(2, 5, 32, requires_grad=True)
+    ego_token = torch.randn(2, 1, 32, requires_grad=True)
+    current_velocity = torch.randn(2, 2)
+    future_latents = torch.randn(2, 8, 4, 32, requires_grad=True)
+
+    logits, clearance, timestep_risk = scorer(
+        proposals, scene, ego_token, current_velocity, future_latents
+    )
+
+    assert clearance.shape == (2, 3, 8)
+    assert timestep_risk.shape == (2, 3, 8)
+    (clearance.mean() + sum(value.mean() for value in logits.values())).backward()
+    assert future_latents.grad is not None
+    assert torch.isfinite(future_latents.grad).all()
+
+
+def test_future_latents_require_exact_timestep_alignment() -> None:
+    scorer = TemporalRiskScorer(_config())
+
+    with pytest.raises(ValueError, match="Expected 8 future steps"):
+        scorer(
+            torch.randn(1, 2, 8, 3),
+            torch.randn(1, 5, 32),
+            torch.randn(1, 1, 32),
+            torch.randn(1, 2),
+            torch.randn(1, 7, 4, 32),
+        )
+
+
+def test_future_attention_queries_pre_scene_proposal_tokens() -> None:
+    class AddSceneContext(nn.Module):
+        def forward(self, tokens, scene_features):
+            return tokens + 10.0
+
+    class CaptureFutureAttention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.queries = None
+
+        def forward(self, proposal_tokens, future_latents):
+            self.queries = proposal_tokens.detach().clone()
+            return torch.zeros_like(proposal_tokens)
+
+    scorer = TemporalRiskScorer(_config())
+    scorer.scene_layers = nn.ModuleList([AddSceneContext()])
+    capture = CaptureFutureAttention()
+    scorer.future_attention = capture
+    proposals = torch.randn(1, 2, 8, 3)
+    velocity = torch.randn(1, 2)
+    ego_token = torch.randn(1, 1, 32)
+    pose_features = scorer._build_pose_features(proposals, velocity)
+    expected = scorer.pose_encoder(pose_features)
+    expected = expected + scorer.temporal_embedding + ego_token[:, None, :, :]
+    expected = scorer.temporal_encoder(expected.reshape(2, 8, 32)).reshape(
+        1, 2, 8, 32
+    )
+
+    scorer(
+        proposals,
+        torch.randn(1, 5, 32),
+        ego_token,
+        velocity,
+        torch.randn(1, 8, 4, 32),
+    )
+
+    assert torch.allclose(capture.queries, expected)
+
+
+def test_scorer_rejects_mismatched_future_interval() -> None:
+    config = _config()
+    config.future_interval = 0.25
+
+    with pytest.raises(ValueError, match="same interval"):
+        TemporalRiskScorer(config)
 

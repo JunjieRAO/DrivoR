@@ -146,6 +146,11 @@ class DrivoRLoss(torch.nn.Module):
                         collision_near_threshold: float = 1.0,
                         at_fault_timestep_weight: float = 0.1,
                         at_fault_timestep_pos_weight: float = 5.0,
+                        future_loss_weight: float = 0.2,
+                        future_velocity_weight: float = 0.1,
+                        future_focal_gamma: float = 2.0,
+                        future_occupancy_pos_weight: float = 5.0,
+                        future_velocity_occupancy_threshold: float = 0.1,
                         **kwargs):
         super().__init__()
 
@@ -174,6 +179,11 @@ class DrivoRLoss(torch.nn.Module):
         self.collision_near_threshold = collision_near_threshold
         self.at_fault_timestep_weight = at_fault_timestep_weight
         self.at_fault_timestep_pos_weight = at_fault_timestep_pos_weight
+        self.future_loss_weight = future_loss_weight
+        self.future_velocity_weight = future_velocity_weight
+        self.future_focal_gamma = future_focal_gamma
+        self.future_occupancy_pos_weight = future_occupancy_pos_weight
+        self.future_velocity_occupancy_threshold = future_velocity_occupancy_threshold
         if clearance_clip_min >= clearance_clip_max:
             raise ValueError("clearance_clip_min must be smaller than clearance_clip_max.")
         if clearance_near_tau <= 0:
@@ -186,6 +196,78 @@ class DrivoRLoss(torch.nn.Module):
             raise ValueError("collision sign sample weights must be non-negative.")
         if at_fault_timestep_weight < 0 or at_fault_timestep_pos_weight <= 0:
             raise ValueError("at-fault timestep weights must be positive.")
+        if min(future_loss_weight, future_velocity_weight, future_focal_gamma) < 0:
+            raise ValueError("Future loss weights and focal gamma must be non-negative.")
+        if future_occupancy_pos_weight <= 0:
+            raise ValueError("Future occupancy positive weight must be positive.")
+
+    def future_prediction_loss(self, targets, pred):
+        required_targets = (
+            "future_dynamic_occupancy",
+            "future_dynamic_velocity",
+            "future_dynamic_valid",
+        )
+        missing = [name for name in required_targets if name not in targets]
+        if missing:
+            raise KeyError(
+                "Future supervision is enabled but cached targets are missing "
+                f"{missing}. Regenerate the drivor_target cache."
+            )
+
+        occupancy_logits = pred["pred_future_occupancy"]
+        occupancy_target = targets["future_dynamic_occupancy"].to(
+            device=occupancy_logits.device, dtype=occupancy_logits.dtype
+        )
+        valid = targets["future_dynamic_valid"].to(
+            device=occupancy_logits.device, dtype=occupancy_logits.dtype
+        )
+        if occupancy_logits.shape != occupancy_target.shape:
+            raise ValueError(
+                "Future occupancy prediction and target shapes differ: "
+                f"{tuple(occupancy_logits.shape)} vs {tuple(occupancy_target.shape)}."
+            )
+
+        occupancy_point_loss = F.binary_cross_entropy_with_logits(
+            occupancy_logits,
+            occupancy_target,
+            reduction="none",
+            pos_weight=occupancy_logits.new_tensor(self.future_occupancy_pos_weight),
+        )
+        probability = occupancy_logits.sigmoid()
+        target_probability = (
+            occupancy_target * probability
+            + (1.0 - occupancy_target) * (1.0 - probability)
+        )
+        occupancy_point_loss = occupancy_point_loss * (
+            1.0 - target_probability
+        ).pow(self.future_focal_gamma)
+        occupancy_valid = valid.expand_as(occupancy_point_loss)
+        occupancy_loss = (
+            occupancy_point_loss * occupancy_valid
+        ).sum() / occupancy_valid.sum().clamp(min=1.0)
+
+        velocity_prediction = pred["pred_future_velocity"]
+        velocity_target = targets["future_dynamic_velocity"].to(
+            device=velocity_prediction.device, dtype=velocity_prediction.dtype
+        )
+        if velocity_prediction.shape != velocity_target.shape:
+            raise ValueError(
+                "Future velocity prediction and target shapes differ: "
+                f"{tuple(velocity_prediction.shape)} vs {tuple(velocity_target.shape)}."
+            )
+        occupied = (
+            occupancy_target.amax(dim=2, keepdim=True)
+            > self.future_velocity_occupancy_threshold
+        ).to(velocity_prediction.dtype)
+        velocity_mask = (occupied * valid).expand_as(velocity_prediction)
+        velocity_point_loss = F.smooth_l1_loss(
+            velocity_prediction, velocity_target, reduction="none"
+        )
+        velocity_loss = (
+            velocity_point_loss * velocity_mask
+        ).sum() / velocity_mask.sum().clamp(min=1.0)
+        future_loss = occupancy_loss + self.future_velocity_weight * velocity_loss
+        return occupancy_loss, velocity_loss, future_loss
 
     def clearance_loss(self, prediction, target):
         target = target.to(prediction.dtype).clamp(
@@ -456,6 +538,13 @@ class DrivoRLoss(torch.nn.Module):
             at_fault_timestep_loss = 0
             at_fault_timestep_metrics = {}
 
+        if self.future_loss_weight > 0 and "pred_future_occupancy" in pred:
+            future_occupancy_loss, future_velocity_loss, future_loss = (
+                self.future_prediction_loss(targets, pred)
+            )
+        else:
+            future_occupancy_loss = future_velocity_loss = future_loss = 0
+
 
         if pred["agent_states"] is not None:
             agent_class_loss, agent_box_loss = _agent_loss(targets, pred, config,
@@ -482,6 +571,7 @@ class DrivoRLoss(torch.nn.Module):
                 + self.clearance_weight * clearance_loss
                 + self.collision_sign_weight * collision_sign_loss
                 + self.at_fault_timestep_weight * at_fault_timestep_loss
+                + self.future_loss_weight * future_loss
 
         )
 
@@ -509,6 +599,9 @@ class DrivoRLoss(torch.nn.Module):
             "clearance_loss": clearance_loss,
             "collision_sign_loss": collision_sign_loss,
             "at_fault_timestep_loss": at_fault_timestep_loss,
+            "future_occupancy_loss": future_occupancy_loss,
+            "future_velocity_loss": future_velocity_loss,
+            "future_loss": future_loss,
             "inter_loss0": inter_loss0,
             # "inter_loss1": inter_loss1,
             "inter_loss": inter_loss,

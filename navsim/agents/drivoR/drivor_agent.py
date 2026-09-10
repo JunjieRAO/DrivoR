@@ -217,7 +217,53 @@ class DrivoRAgent(AbstractAgent):
             else:
                 state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
                     "state_dict"]
-            self.load_state_dict({k.replace("agent._drivor_model", "_drivor_model"): v for k, v in state_dict.items()})
+            state_dict = {
+                k.replace("agent._drivor_model", "_drivor_model"): v
+                for k, v in state_dict.items()
+            }
+            legacy_pool_key = "_drivor_model.scorer.global_pool_query"
+            if legacy_pool_key in state_dict:
+                legacy_pool_query = state_dict.pop(legacy_pool_key)
+                state_dict.setdefault(
+                    "_drivor_model.scorer.dac_pool_query", legacy_pool_query.clone()
+                )
+                state_dict.setdefault(
+                    "_drivor_model.scorer.ddc_pool_query", legacy_pool_query.clone()
+                )
+            for key in list(state_dict):
+                if key.startswith("_drivor_model.scorer.ttc_timestep_risk_head."):
+                    state_dict.pop(key)
+            incompatible = self.load_state_dict(
+                state_dict,
+                strict=False,
+            )
+            allowed_missing_prefixes = (
+                "_drivor_model.future_predictor.",
+                "_drivor_model.future_occupancy_decoder.",
+                "_drivor_model.scorer.future_attention.",
+                "_drivor_model.scorer.future_gate.",
+                "_drivor_model.scorer.post_fusion_temporal_encoder.",
+                "_drivor_model.scorer.ego_progress_summary.",
+                "_drivor_model.scorer.comfort_summary.",
+                "_drivor_model.scorer.comfort_kinematics_summary.",
+                "_drivor_model.scorer.dac_pool_query",
+                "_drivor_model.scorer.ddc_pool_query",
+            )
+            invalid_missing = [
+                key
+                for key in incompatible.missing_keys
+                if not key.startswith(allowed_missing_prefixes)
+            ]
+            if invalid_missing or incompatible.unexpected_keys:
+                raise RuntimeError(
+                    "Checkpoint mismatch outside new future modules: "
+                    f"missing={invalid_missing}, unexpected={incompatible.unexpected_keys}"
+                )
+            if incompatible.missing_keys:
+                print(
+                    f"Initialized {len(incompatible.missing_keys)} new future-module "
+                    "tensors not present in the legacy checkpoint."
+                )
 
     def get_sensor_config(self) :
         """Inherited, see superclass."""
