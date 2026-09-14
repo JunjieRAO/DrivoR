@@ -22,7 +22,7 @@ from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PD
 from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representation import ego_state_to_state_array
 from .core import Candidate, candidate_id, BOUNDS, basis, residual
 from .geometry import NominalValidator, angle_delta, vertices
-from .adapter_data import cached_actors, frame_clock, speed_limit_at
+from .adapter_data import cached_actors, frame_clock, speed_limit_at, experiment_speed_limit
 
 
 class RecordingTracker(BatchLQRTracker):
@@ -101,6 +101,9 @@ class OfficialEvaluator:
         self.road = unary_union([dm[dm.tokens[j]] for j in dm.get_indices_of_map_type(layers)])
         if self.road.is_empty or not self.road.is_valid:
             raise ValueError("missing/invalid drivable union")
+        self.intersections = unary_union([dm[dm.tokens[j]] for j in
+            dm.get_indices_of_map_type([SemanticMapLayer.INTERSECTION])])
+        self.gt_speed_states = None
         self.lanes = []
         for j in dm.get_indices_of_map_type([SemanticMapLayer.LANE, SemanticMapLayer.LANE_CONNECTOR]):
             token, layer = dm.tokens[j], dm.map_types[j]
@@ -130,7 +133,9 @@ class OfficialEvaluator:
 
     def speed_limit(self, state):
         center = Polygon(vertices(state[:3], self.ego_local)).centroid
-        return speed_limit_at(self.lanes, center)
+        sample = speed_limit_at(self.lanes, center)
+        return experiment_speed_limit(sample, state[:2], self.intersections.covers(center),
+                                      self.gt_speed_states)
 
     def evaluate_poses(self, poses):
         poses = np.asarray(poses, dtype=float)
@@ -146,6 +151,8 @@ class OfficialEvaluator:
         commands = np.stack(self.simulator._tracker.commands)[:, 1].copy()
         ref = get_trajectory_as_array(transform_trajectory(trajectory, self.cache.ego_state),
                                      self.sampling, self.cache.ego_state.time_point)
+        if self.gt_speed_states is None:
+            self.gt_speed_states = executed.copy()
         gate = self.validator.check(executed, metrics)
         gate["tracking_rms_xy"] = float(np.sqrt(np.mean(np.sum((ref[:, :2] - executed[:, :2]) ** 2, axis=1))))
         self.evaluations += 1

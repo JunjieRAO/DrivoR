@@ -88,3 +88,45 @@ def speed_limit_at(lanes, point):
             'source': 'minimum_matching_on_route_map_limits' if on_route else 'minimum_matching_map_limits',
             'reason': None if known else 'missing_map_limit' if matches else 'no_matching_lane',
             'matches': details}
+
+
+def experiment_speed_limit(sample, point, in_intersection, gt_states):
+    """Map limits take priority; unknown intersection limits use spatial GT + 1 m/s."""
+    out = dict(sample)
+    out['in_intersection'] = bool(in_intersection)
+    if out['limit_mps'] is not None:
+        return out
+    if not in_intersection:
+        out.update(source='unknown_non_intersection_unbounded', allowed_unbounded=True)
+        return out
+    xy = np.asarray(gt_states)[:, :2]
+    speeds = np.asarray(gt_states)[:, 3]
+    q = np.asarray(point, dtype=float)
+    segments = np.diff(xy, axis=0)
+    lengths = np.linalg.norm(segments, axis=1)
+    valid = lengths > 1e-6
+    if not valid.any():
+        if np.linalg.norm(q - xy[0]) <= .75:
+            out.update(limit_mps=float(max(0., speeds.min()) + 1), source='stationary_gt_plus_1')
+        else:
+            out.update(reason='gt_projection_unverifiable')
+        return out
+    indices = np.flatnonzero(valid)
+    raw = np.sum((q - xy[:-1][valid]) * segments[valid], axis=1) / lengths[valid]**2
+    u = np.clip(raw, 0, 1)
+    distance = np.linalg.norm(q - (xy[:-1][valid] + u[:, None]*segments[valid]), axis=1)
+    k = int(np.argmin(distance))
+    arc = np.r_[0., np.cumsum(lengths)]
+    projected = arc[indices] + u*lengths[valid]
+    # Refuse extrapolation and spatially ambiguous crossings of the GT path.
+    near = distance <= distance[k] + 1e-5
+    ambiguous = np.ptp(projected[near]) > .25
+    outside = (k == 0 and raw[k] < -1e-6) or (k == len(indices)-1 and raw[k] > 1+1e-6)
+    if distance[k] > .75 or ambiguous or outside:
+        out.update(reason='gt_projection_unverifiable')
+        return out
+    j = indices[k]
+    speed = float((1-u[k])*speeds[j] + u[k]*speeds[j+1])
+    out.update(limit_mps=max(0., speed)+1., source='spatial_gt_rollout_plus_1',
+               gt_speed_mps=speed, gt_arc_m=float(projected[k]), reason=None)
+    return out

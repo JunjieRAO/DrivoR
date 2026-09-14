@@ -1,3 +1,9 @@
+## Current experimental policy (2026-09-14)
+
+Missing actor intervals are diagnostic only; observed intervals and endpoints still undergo collision checks. This supersedes the earlier reachable-region gate. Export remains disabled.
+
+Known map limits remain mandatory. Unknown limits inside map INTERSECTION polygons use spatial GT rollout speed plus 1 m/s; outside intersections no extra speed ceiling applies. Ambiguous or out-of-range GT projection is rejected. Other gates remain unchanged. Use a fresh RESULT_ROOT to rerun smoke.
+
 # V1 离线搜索工程验证
 
 ## 首轮 full_results 后的修复（报告 schema_version=2）

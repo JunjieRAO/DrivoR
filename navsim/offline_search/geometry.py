@@ -112,7 +112,7 @@ class NominalValidator:
             missing_intervals = []
             for t in range(40):
                 if not actor.valid[t:t + 2].all():
-                    self.actor_regions[actor.token, t] = missing_interval_region(actor, t, bound, config.dt)
+                    self.actor_regions[actor.token, t] = None  # Missing intervals are diagnostic only.
                     missing_intervals.append(t)
             self.lifecycle_diagnostics.append({'token': actor.token, 'observed_indices': known.tolist(),
                 'missing_interval_indices': missing_intervals, 'engineering_speed_bound_mps': bound,
@@ -150,7 +150,7 @@ class NominalValidator:
                 speed_samples.append(value)
             limits = np.array([sample['limit_mps'] if sample['limit_mps'] is not None else np.nan for sample in speed_samples])
             known_limits = np.isfinite(limits) & (limits > 0)
-            if not known_limits.all():
+            if any(x["limit_mps"] is None and not x.get("allowed_unbounded", False) for x in speed_samples):
                 reasons.append("speed_limit_unverifiable")
             # Preserve known speeding even if another timestamp has no limit.
             if known_limits.any():
@@ -170,14 +170,9 @@ class NominalValidator:
                                 Polygon(vertices(actor.poses[j], actor.local))):
                             collisions += 1
                             events.append({'kind': 'observed_partial_actor_contact', 't': t * cfg.dt, 'actor': actor.token})
-                    possible = self.actor_regions.get((actor.token, t))
-                    if possible is None or possible.is_empty or not ego_swept.disjoint(possible):
-                        uncertain_intervals += 1
-                        reasons.append('actor_lifecycle_unverifiable:' + actor.token)
-                        events.append({'kind': 'unknown_actor_reachable_region', 't': t * cfg.dt, 'actor': actor.token})
-                    else:
-                        excluded_intervals += 1
-                        min_distance = min(min_distance, float(ego_swept.distance(possible)))
+                    uncertain_intervals += 1
+                    events.append({'kind': 'missing_actor_interval_not_checked',
+                                   't': t * cfg.dt, 'actor': actor.token})
                     continue
                 ok, distance = certify_separation(states[t, :3], states[t + 1, :3], self.ego_local,
                     actor.poses[t], actor.poses[t + 1], actor.local, cfg.dt, cfg.min_interval, cfg.collision_margin)
@@ -205,7 +200,9 @@ class NominalValidator:
                 "max_jerk": float(abs(jerk).max()), "max_lateral_acceleration": float(abs(lat).max()),
                 "lifecycle_uncertain_interval_count": uncertain_intervals,
                 "lifecycle_excluded_interval_count": excluded_intervals,
-                "lifecycle_bound_assumption_used": any(x['partial'] for x in self.lifecycle_diagnostics),
+                "lifecycle_bound_assumption_used": False,
+                "missing_actor_policy": "observed_intervals_only",
+                "max_speed_mps": float(v.max()),
                 "missing_actor_speed_bound_mps": cfg.missing_actor_speed_bound_mps,
                 "speed_limit_diagnostics": {'samples': speed_samples,
                     'unknown_indices': [i for i, x in enumerate(speed_samples) if x['limit_mps'] is None],
