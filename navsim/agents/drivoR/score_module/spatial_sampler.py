@@ -29,6 +29,10 @@ def project_poses_to_camera(
     C = cam_K.shape[1]
     W_img, H_img = image_size
 
+    # Ensure cam_K and world_2_cam match proposals device and dtype (e.g. float16/float32 instead of double)
+    cam_K = cam_K.to(device=proposals.device, dtype=proposals.dtype)
+    world_2_cam = world_2_cam.to(device=proposals.device, dtype=proposals.dtype)
+
     # 1. Expand proposals to homogeneous 3D coordinates (x, y, 0, 1)
     pts_ego = torch.zeros((B, N, T, 4), device=proposals.device, dtype=proposals.dtype)
     pts_ego[..., 0] = proposals[..., 0]  # X
@@ -141,6 +145,7 @@ class LocalPatchSampler(nn.Module):
         uv_norm, depth, valid_mask = project_poses_to_camera(
             proposals, cam_K, world_2_cam, image_size=self.image_size
         )
+        uv_norm = uv_norm.to(dtype=patch_features.dtype)
 
         # 2. Compute Patch Grid Centers (H_grid, W_grid, 2)
         device = patch_features.device
