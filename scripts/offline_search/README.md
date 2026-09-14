@@ -1,3 +1,7 @@
+Terminal heading gate: final executed heading error relative to the cached route centerline must not exceed spatially aligned 5-second GT rollout heading error plus 1 degree. Invalid/non-simple route, reversed GT progress, or unavailable GT coverage is unverifiable. Report endpoint rays: orange dashed = route tangent, green = candidate heading. No lateral-return constraint is added.
+
+GT speed reference now uses a separate 5-second GT rollout from the available 10 future poses; candidate formal scoring remains 4 seconds. No endpoint extrapolation is used.
+
 ## Current experimental policy (2026-09-14)
 
 Missing actor intervals are diagnostic only; observed intervals and endpoints still undergo collision checks. This supersedes the earlier reachable-region gate. Export remains disabled.

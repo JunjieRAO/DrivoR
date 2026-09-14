@@ -34,3 +34,14 @@ def test_ambiguous_return_path_rejected():
 def test_stationary_reference():
     s = gt(); s[:,:4] = 0
     assert experiment_speed_limit({'limit_mps':None}, [0,0], True, s)['limit_mps'] == 1
+
+
+def test_faster_candidate_uses_observed_gt_tail():
+    short = gt()
+    assert experiment_speed_limit({'limit_mps':None}, [21,0], True, short)['limit_mps'] is None
+    extended = np.zeros((51,11))
+    extended[:,0] = np.arange(51)*.5
+    extended[:,3] = 5.
+    result = experiment_speed_limit({'limit_mps':None}, [21,0], True, extended)
+    assert result['limit_mps'] == 6.
+    assert experiment_speed_limit({'limit_mps':None}, [26,0], True, extended)['limit_mps'] is None

@@ -94,7 +94,7 @@ def missing_interval_region(actor, index, speed_bound, dt):
 
 class NominalValidator:
     def __init__(self, config, ego_local, actors, road, gt_path, wheelbase,
-                 unknown_reasons=(), speed_limit_fn=None):
+                 unknown_reasons=(), speed_limit_fn=None, terminal_heading_fn=None):
         self.config = config
         self.ego_local = np.asarray(ego_local)
         self.actors, self.road = actors, road
@@ -102,6 +102,7 @@ class NominalValidator:
         self.wheelbase = wheelbase
         self.unknown = list(unknown_reasons)
         self.speed_limit_fn = speed_limit_fn
+        self.terminal_heading_fn = terminal_heading_fn
         self.actor_regions = {}
         self.lifecycle_diagnostics = []
         for actor in actors:
@@ -192,9 +193,14 @@ class NominalValidator:
         path = LineString(states[:, :2])
         if not self.gt_path.buffer(cfg.gt_path_margin).covers(path):
             reasons.append("gt_path_corridor")
+        heading = self.terminal_heading_fn(states[-1]) if self.terminal_heading_fn else {'enabled': False}
+        if self.terminal_heading_fn and not heading['passed']:
+            reasons.append(heading['reason'])
+            events.append({'kind': heading['reason'], 't': 4.0})
         data_ok = not self.unknown and not any("unverifiable" in x for x in reasons)
         return {"checked_nominal_pass": not reasons, "data_verifiable": data_ok,
                 "reasons": sorted(set(reasons)), "events": events,
+                "terminal_heading": heading,
                 "clearance_lower_bound": float(min_distance) if np.isfinite(min_distance) else 1e6,
                 "clearance_no_actors": not bool(self.actors),
                 "max_jerk": float(abs(jerk).max()), "max_lateral_acceleration": float(abs(lat).max()),
@@ -214,3 +220,35 @@ class NominalValidator:
                                   "one_second_tail", "13_case_stress", "anchor_stop_clustering",
                                   "missing_actor_motion_bound_validation"],
                 "export_certified": False}
+
+
+def terminal_heading_check(state, gt_states, route, tolerance_deg=1.):
+    """Compare executed headings at the same ordered route arc position."""
+    result = {'passed': False, 'reason': 'terminal_heading_unverifiable',
+              'tolerance_deg': tolerance_deg}
+    if route is None or route.is_empty or not route.is_simple or route.length < 1e-6:
+        return result
+    progress = np.array([route.project(Point(*p[:2])) for p in gt_states])
+    target = float(route.project(Point(*state[:2])))
+    if np.any(np.diff(progress) < -1e-5) or target < progress[0]-1e-6 or target > progress[-1]+1e-6:
+        return result
+    # No route-end clipping: a tangent beyond the supplied route is unknown.
+    if target <= 1e-5 or target >= route.length-1e-5:
+        return result
+    unique = np.unique(progress)
+    headings = np.unwrap(gt_states[:,2])
+    # At stationary positions use the tightest observed error, not arbitrary time.
+    before = np.asarray(route.interpolate(max(0.,target-.1)).coords)[0]
+    after = np.asarray(route.interpolate(min(route.length,target+.1)).coords)[0]
+    ref = float(np.arctan2(*(after-before)[::-1]))
+    errors = np.abs(angle_delta(ref, headings))
+    grouped = np.array([headings[np.flatnonzero(progress == x)[np.argmin(errors[progress == x])]] for x in unique])
+    gt_error = float(abs(angle_delta(ref, np.interp(target, unique, grouped))))
+    candidate_error = float(abs(angle_delta(ref, state[2])))
+    passed = candidate_error <= gt_error + np.deg2rad(tolerance_deg) + 1e-10
+    result.update(passed=bool(passed), reason=None if passed else 'terminal_heading_regression',
+                  candidate_error_deg=float(np.rad2deg(candidate_error)),
+                  gt_error_deg=float(np.rad2deg(gt_error)), route_arc_m=target,
+                  reference_heading_rad=ref, endpoint_xy=state[:2].tolist(),
+                  candidate_heading_rad=float(state[2]))
+    return result

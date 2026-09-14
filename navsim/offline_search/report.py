@@ -76,9 +76,13 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:7px;text-
 const D=JSON.parse(document.getElementById('data').textContent), $=x=>document.getElementById(x),
  esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const G=D.candidates.find(c=>c.id===D.gt_id);let C=D.candidates[1]||G, timer=null;
+const minGain=D.metadata.config.min_gain;
+function qualification(c){return c.gate.checked_nominal_pass && c.metrics.score>=G.metrics.score+minGain}
+function statusLabel(c){return !c.gate.checked_nominal_pass?'约束未通过':qualification(c)?'约束通过，PDMS 提升达标':'约束通过，收益未达标'}
+
 $('identity').textContent='Scene: '+D.token+' · 显示 '+D.candidates.length+' 条轨迹 · 搜索状态: '+(D.metadata.summary?.search_status||'unknown')+' · CEM候选: '+(D.metadata.summary?.search_unique_candidates??'unknown');
 $('warning').textContent=D.demo?'合成 DEMO：用于检查搜索、几何验证与报告功能。分数为演示代理值，不是 NAVSIM PDMS，也不是实验收益。':'工程检查结果：评分来自 V1 正式入口。缺帧物体按记录的速度界作条件性范围检查，并非真实运动保证；灰框仅显示已知时刻，未显示不代表不存在。全部候选未完成严格验收，不可直接用作 teacher。';
-D.candidates.forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.island+' / '+c.id.slice(0,8)+' / '+(100*c.metrics.score).toFixed(3)+' / '+(c.gate.checked_nominal_pass?'已实现的名义检查通过':'失败或不可核验');$('candidate').append(o)});
+D.candidates.forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.island+' / '+c.id.slice(0,8)+' / '+(100*c.metrics.score).toFixed(3)+' / '+statusLabel(c);$('candidate').append(o)});
 $('candidate').value=C.id;
 function drawMap(){
  const t=+$('time').value, points=[...G.executed,...C.executed,...C.reference,...(C.generated||[])];
@@ -91,6 +95,10 @@ function drawMap(){
  const poly=(a,color,opacity=1)=>'<polygon points="'+pointsStr(a)+'" fill="'+color+'" fill-opacity="'+opacity+'" stroke="'+color+'" stroke-width="1.5"/>';
  let out='<path d="'+D.road.map(r=>'M'+r.map(p=>pt(p).join(',')).join('L')+'Z').join(' ')+'" fill="#e8edf1" fill-rule="evenodd" stroke="#a3afbd" stroke-width="1"/>';
  out+=line(D.centerline,'#99a5b2',1.5,'8 5');
+ const h=C.gate.terminal_heading;
+ if(h&&h.endpoint_xy){const p=h.endpoint_xy,ray=a=>[p,[p[0]+4*Math.cos(a),p[1]+4*Math.sin(a)]];
+ out+=line(ray(h.reference_heading_rad),'#e29213',3,'5 3')+line(ray(h.candidate_heading_rad),'#13946d',3);}
+
  if($('all').checked)D.candidates.forEach(c=>out+=line(c.executed,c.gate.checked_nominal_pass?'#b7d7c8':'#e9baba',1));
  out+=line(G.reference,'#83abe0',1.5,'4 4')+line(G.executed,'#2463b3',3);
  if(C.generated)out+=line(C.generated,'#d97706',2,'2 4');
@@ -112,7 +120,7 @@ function chart(key,label,thresholds){
  $(key).setAttribute('viewBox','0 0 580 140');$(key).innerHTML=out;
 }
 function refresh(){
- $('status').innerHTML='<p class="'+(C.gate.checked_nominal_pass?'good':'bad')+'">'+(C.gate.checked_nominal_pass?'已实现的名义检查通过':'失败／不可核验')+'；完整验收：未完成；训练导出：禁止</p><p>'+esc(C.gate.reasons.join(', ')||'无已实现检查失败')+'</p>';
+ $('status').innerHTML='<p class="'+(C.gate.checked_nominal_pass?'good':'bad')+'">'+statusLabel(C)+'；完整验收：未完成；训练导出：禁止</p><p>'+esc(C.gate.reasons.join(', ')||'无已实现检查失败')+'</p>';
  $('metrics').innerHTML='<tr><th>指标（0–100）</th><th>GT</th><th>候选</th><th>差值</th></tr>'+Object.keys(C.metrics).map(k=>'<tr><td>'+esc(k)+'</td><td>'+(G.metrics[k]*100).toFixed(3)+'</td><td>'+(C.metrics[k]*100).toFixed(3)+'</td><td>'+((C.metrics[k]-G.metrics[k])*100).toFixed(3)+'</td></tr>').join('');
  $('detail').textContent=JSON.stringify({gate:C.gate,theta:C.theta,controls:C.controls},null,2);
  chart('speed','速度 m/s',[]);chart('acceleration','纵向加速度 m/s²',[-3.5,2]);chart('jerk','纵向 jerk m/s³',[-3.5,3.5]);drawMap();
@@ -120,6 +128,7 @@ function refresh(){
 $('candidate').onchange=()=>{C=D.candidates.find(c=>c.id===$('candidate').value);refresh()};
 ['time','all','ghost'].forEach(x=>$(x).oninput=drawMap);
 $('play').onclick=()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='播放'}else{$('play').textContent='暂停';timer=setInterval(()=>{$('time').value=(+$('time').value+1)%41;drawMap()},100)}};
-$('trace').innerHTML='<table><tr><th>初始化岛</th><th>代</th><th>通过 / 候选</th><th>最佳分数</th><th>累计评估</th></tr>'+D.trace.filter(r=>r.generation!==undefined).map(r=>'<tr><td>'+esc(r.island)+'</td><td>'+r.generation+'</td><td>'+r.feasible+' / '+r.population+'</td><td>'+(r.best_score===null?'—':(100*r.best_score).toFixed(3))+'</td><td>'+r.evaluations+'</td></tr>').join('')+'</table>';
+$('trace').innerHTML='<table><tr><th>初始化岛</th><th>代</th><th>约束通过 / 候选</th><th>达标</th><th>最佳分数</th><th>累计评估</th></tr>'+D.trace.filter(r=>r.generation!==undefined).map(r=>'<tr><td>'+esc(r.island)+'</td><td>'+r.generation+'</td><td>'+r.feasible+' / '+r.population+'</td><td>'+(r.qualified??'—')+'</td><td>'+(r.best_score===null?'—':(100*r.best_score).toFixed(3))+'</td><td>'+r.evaluations+'</td></tr>').join('')+'</table>';
+$('trace').innerHTML+='<p>达标：约束通过且 PDMS 比 GT 至少提高 '+(100*minGain).toFixed(3)+' 分（0–100）。各行按本代轨迹 ID 去重；全程去重达标：'+(D.metadata.summary?.qualified_count??'未记录')+' 条。达标数不等于归档或聚类代表数。</p>';
 $('meta').textContent=JSON.stringify(D.metadata,null,2);refresh();
 </script></html>'''
