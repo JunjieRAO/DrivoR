@@ -1,5 +1,31 @@
 # V1 离线搜索工程验证
 
+## 首轮 full_results 后的修复（报告 schema_version=2）
+
+首轮14场景被生命周期整场拦截、2场景被2ms时间阈值拦截，没有进入CEM。此版本修复如下：
+
+- **部分track保留**：缺失pose用NaN和显式mask保存，已知区间正常碰撞检查，不删除track、不补静止轨迹。
+- **未知区间按候选核验**：使用最近的已知前/后位置，构造覆盖整个未知区间的中心可达圆盘及车体外接圆；有两个锚点时取区域交集。与ego连续包络无法证明分离的候选仍为`actor_lifecycle_unverifiable`。远处不相交的部分track不再自动让整个场景跳过搜索。
+- **条件性范围必须明确**：缺失期间中心速度上界默认55m/s；如果已知中心位移已超过该值，则上调到观测值的1.01倍。这是保守工程假设，不是从缺失数据证明出的实际速度上界。诊断逐actor记录实际采用值；该假设只支持工程筛选，额外加入`missing_actor_motion_bound_validation`待验收项，全部输出仍`export_certified=false`。不能将“范围外排除”解释为现实无碰撞证明。
+- **时间口径**：评分继续按官方0.5秒名义frame时钟和0.1秒rollout；原始时间戳、逐帧间隔、最大抖动完整记录。毫秒抖动不再按2ms整场拒绝；乱序/重复时间戳、相对名义时刻或相邻间隔偏离达到半帧(0.25s)仍报错并保存诊断。初始ego/cache的位姿和时间一致性检查保留。
+- **限速**：记录匹配lane/connector、route关系和限速来源；未知值仍未知，已知超速仍失败。一个时刻限速缺失不再掩盖其他时刻的超速。优先使用覆盖当前中心的on-route lane，多个相关lane取最小已知值；相关lane中存在未知值则仍不可核验，不填默认限速。
+- **状态**：明确区分`gt_upper_bound`、`precheck_blocked`、`search_not_started`、`no_verifiable_candidate_in_budget`、`no_feasible_candidate_in_budget`、`no_nominal_improvement_in_budget`和`nominal_improvement_found`。汇总直接记录是否启动、唯一候选/控制评估数及各代可核验数量。
+- **新增证据**：每场景`diagnostics.json`与`actor_replay.npz`包含生命周期、时间、限速和完整部分actor回放。HTML对未知时刻输出null，不画虚构物体；页面显示CEM状态及候选数。
+
+**复用原16场景和正式缓存，不重新prepare。** 同步更新代码到服务器后：
+
+```bash
+cd /mnt/workspace/roa7sgh/DrivoR
+export WORK_ROOT=/mnt/workspace/roa7sgh/DrivoR/exp/offline_search/nav1_engineering
+export RESULT_ROOT=/mnt/workspace/roa7sgh/DrivoR/exp/offline_search/nav1_engineering_fix1
+bash scripts/offline_search/nav1_engineering.sh verify
+bash scripts/offline_search/nav1_engineering.sh smoke
+# 先检查候选数>0、运行无错误以及diagnostics，再跑：
+bash scripts/offline_search/nav1_engineering.sh full
+```
+
+新报告为`$RESULT_ROOT/smoke_results/index.html`和`$RESULT_ROOT/full_results/index.html`。两个结果目录须不存在。修复不会保证每场景存在可核验候选：如果未知物体范围确实可能影响所有候选或地图限速缺失，仍会明确报告对应失败。
+
 当前代码固定真实初始 ego、导航与图像，搜索未来控制残差。无模型训练，不要求 GPU；沿用已有 DrivoR Linux 环境与 metric cache。新增代码在 `navsim/offline_search/`，没有修改官方评分器或网络。
 
 完整设计与实施边界见 [离线搜索方案 v2.2](../../docs/offline_search_plan.md)。
@@ -112,7 +138,7 @@ bash scripts/offline_search/run_engineering.sh run \
 - 名义检查：官方 NC/DAC/TTC/C/DDC、缓存中全部物理 box 的全责任碰撞及 0.25 m 余量、连续 SE2 区间保守包络、完整车身道路覆盖及 0.10 m 余量、GT 几何 corridor、地图限速、倒车/加速度/几何侧向加速度/jerk/转向角/转向率。
 - 间隔 0.1 秒，包络冲突二分到 0.0125 秒，不能证明分离即拒绝。接触和初始接触同样拒绝；不豁免官方 collided IDs。几何连续性只针对缓存节点定义的分段 SE2 回放。
 - 搜索使用 `checked_nominal_pass`，**它不是原计划的完整 `G_search`**：尚未实现的 gate 列在每条记录的 `pending_gates`。
-- 缓存 actor 生命周期不完整、形状不是可重构的刚性 box、限速未知等都不可核验，不允许当作“已通过名义检查”。需要 10 Hz / `observation_sample_res=1` cache。
+- 缓存 actor 形状无法重构、未知生命周期可达域可能影响候选、相关地图限速未知等仍不可核验。部分track的处理以本文开头schema_version=2修复说明为准，需要10Hz / `observation_sample_res=1` cache。
 - 每代档案要求分数较 GT 增加至少 0.005；最多保留 32 条，并复验保存的 8 pose。
 - 工程代表使用执行轨迹的 xy/速度/航向 complete-link 与两两距离筛选，最多 4 个。**尚未接入原计划的 anchor/stop 类别，不能称完整多样性审计。**
 

@@ -64,6 +64,33 @@ class Actor:
     poses: np.ndarray  # World box-center SE2 at the same 0.1 s nodes as ego.
     local: np.ndarray
 
+    @property
+    def valid(self):
+        return np.isfinite(self.poses).all(axis=1)
+
+
+def missing_interval_region(actor, index, speed_bound, dt):
+    """Over-approximate an unknown footprint under an explicit speed bound.
+
+    Use nearest observed centers on both sides when available. Each disk covers
+    the WHOLE interval, including arbitrary heading via the box circumradius.
+    No pose is extrapolated or held stationary. Disjointness is conditional on
+    the stated engineering bound; it is not a real-world certificate.
+    """
+    known = np.flatnonzero(actor.valid)
+    before = known[known <= index]
+    after = known[known >= index + 1]
+    anchors = ([before[-1]] if len(before) else []) + ([after[0]] if len(after) else [])
+    if not anchors:
+        return None
+    radius = float(np.linalg.norm(actor.local, axis=1).max())
+    region = None
+    for j in anchors:
+        reach = speed_bound * max(abs(index - j), abs(index + 1 - j)) * dt + radius
+        disk = inflated(Point(*actor.poses[j, :2]), reach)
+        region = disk if region is None else region.intersection(disk)
+    return region
+
 
 class NominalValidator:
     def __init__(self, config, ego_local, actors, road, gt_path, wheelbase,
@@ -75,6 +102,22 @@ class NominalValidator:
         self.wheelbase = wheelbase
         self.unknown = list(unknown_reasons)
         self.speed_limit_fn = speed_limit_fn
+        self.actor_regions = {}
+        self.lifecycle_diagnostics = []
+        for actor in actors:
+            known = np.flatnonzero(actor.valid)
+            observed_speed = (float(np.max(np.linalg.norm(np.diff(actor.poses[known, :2], axis=0), axis=1)
+                              / (np.diff(known) * config.dt))) if len(known) > 1 else 0.)
+            bound = max(config.missing_actor_speed_bound_mps, observed_speed * 1.01)
+            missing_intervals = []
+            for t in range(40):
+                if not actor.valid[t:t + 2].all():
+                    self.actor_regions[actor.token, t] = missing_interval_region(actor, t, bound, config.dt)
+                    missing_intervals.append(t)
+            self.lifecycle_diagnostics.append({'token': actor.token, 'observed_indices': known.tolist(),
+                'missing_interval_indices': missing_intervals, 'engineering_speed_bound_mps': bound,
+                'observed_max_center_speed_mps': observed_speed,
+                'partial': bool(missing_intervals)})
 
     def check(self, states, metrics):
         cfg = self.config
@@ -97,21 +140,44 @@ class NominalValidator:
                   "steering_angle": max(0., float(abs(delta).max() / .5 - 1)),
                   "steering_rate": max(0., float(max(abs(rate).max(), abs(states[:, 8]).max()) / .3 - 1))}
         limits = None
+        speed_samples = []
         if self.speed_limit_fn is not None:
-            limits = np.asarray([self.speed_limit_fn(s) for s in states], dtype=float)
-            if not np.isfinite(limits).all() or (limits <= 0).any():
+            for state in states:
+                value = self.speed_limit_fn(state)
+                if not isinstance(value, dict):
+                    value = {'limit_mps': float(value) if value is not None and np.isfinite(value) and value > 0 else None,
+                             'source': 'provided_limit', 'matches': []}
+                speed_samples.append(value)
+            limits = np.array([sample['limit_mps'] if sample['limit_mps'] is not None else np.nan for sample in speed_samples])
+            known_limits = np.isfinite(limits) & (limits > 0)
+            if not known_limits.all():
                 reasons.append("speed_limit_unverifiable")
-            else:
-                bounds["speed_limit"] = max(0., float(np.max(v / limits) - 1))
+            # Preserve known speeding even if another timestamp has no limit.
+            if known_limits.any():
+                bounds["speed_limit"] = max(0., float(np.max(v[known_limits] / limits[known_limits]) - 1))
         else:
             reasons.append("speed_limit_unverifiable")
         reasons.extend(k for k, amount in bounds.items() if amount > 1e-8)
         collisions, road_fail = 0, 0
+        uncertain_intervals, excluded_intervals = 0, 0
         min_distance = float("inf")
         for t in range(40):
+            ego_swept = envelope(states[t, :3], states[t + 1, :3], self.ego_local, cfg.collision_margin)
             for actor in self.actors:
                 if len(actor.poses) < 41 or not np.isfinite(actor.poses[t:t + 2]).all():
-                    reasons.append("actor_lifecycle_unverifiable")
+                    for j in (t, t + 1):
+                        if actor.valid[j] and inflated(Polygon(vertices(states[j, :3], self.ego_local)), cfg.collision_margin).intersects(
+                                Polygon(vertices(actor.poses[j], actor.local))):
+                            collisions += 1
+                            events.append({'kind': 'observed_partial_actor_contact', 't': t * cfg.dt, 'actor': actor.token})
+                    possible = self.actor_regions.get((actor.token, t))
+                    if possible is None or possible.is_empty or not ego_swept.disjoint(possible):
+                        uncertain_intervals += 1
+                        reasons.append('actor_lifecycle_unverifiable:' + actor.token)
+                        events.append({'kind': 'unknown_actor_reachable_region', 't': t * cfg.dt, 'actor': actor.token})
+                    else:
+                        excluded_intervals += 1
+                        min_distance = min(min_distance, float(ego_swept.distance(possible)))
                     continue
                 ok, distance = certify_separation(states[t, :3], states[t + 1, :3], self.ego_local,
                     actor.poses[t], actor.poses[t + 1], actor.local, cfg.dt, cfg.min_interval, cfg.collision_margin)
@@ -137,9 +203,17 @@ class NominalValidator:
                 "clearance_lower_bound": float(min_distance) if np.isfinite(min_distance) else 1e6,
                 "clearance_no_actors": not bool(self.actors),
                 "max_jerk": float(abs(jerk).max()), "max_lateral_acceleration": float(abs(lat).max()),
+                "lifecycle_uncertain_interval_count": uncertain_intervals,
+                "lifecycle_excluded_interval_count": excluded_intervals,
+                "lifecycle_bound_assumption_used": any(x['partial'] for x in self.lifecycle_diagnostics),
+                "missing_actor_speed_bound_mps": cfg.missing_actor_speed_bound_mps,
+                "speed_limit_diagnostics": {'samples': speed_samples,
+                    'unknown_indices': [i for i, x in enumerate(speed_samples) if x['limit_mps'] is None],
+                    'exceeded_indices': [i for i, x in enumerate(speed_samples) if x['limit_mps'] is not None and v[i] > x['limit_mps'] + 1e-8]},
                 "violation": [collisions, 0 if not collisions else 1, road_fail,
                               int("gt_path_corridor" in reasons), max(bounds.values()),
                               int("official_submetrics" in reasons)],
                 "pending_gates": ["raw_actor_coverage", "ordered_route_topology", "time_varying_traffic_lights",
-                                  "one_second_tail", "13_case_stress", "anchor_stop_clustering"],
+                                  "one_second_tail", "13_case_stress", "anchor_stop_clustering",
+                                  "missing_actor_motion_bound_validation"],
                 "export_certified": False}

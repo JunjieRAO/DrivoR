@@ -35,7 +35,7 @@ def write_report(path: Path, token, candidates, gt, road, actors, ego_local, cen
             "candidates": [trajectory(c) for c in unique.values()], "gt_id": gt.id,
             "road": [xy(r) for r in polygon_rings(road)], "centerline": xy(centerline),
             "actors": [{"id": a.token, "footprints": [
-                (vertices(p, a.local) - origin).tolist() for p in a.poses]} for a in actors],
+                (vertices(p, a.local) - origin).tolist() if np.isfinite(p).all() else None for p in a.poses]} for a in actors],
             "trace": trace}
     payload = json.dumps(data, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
     path.write_text(TEMPLATE.replace("__PAYLOAD__", payload), encoding="utf-8")
@@ -76,8 +76,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:7px;text-
 const D=JSON.parse(document.getElementById('data').textContent), $=x=>document.getElementById(x),
  esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const G=D.candidates.find(c=>c.id===D.gt_id);let C=D.candidates[1]||G, timer=null;
-$('identity').textContent='Scene: '+D.token+' · 显示 '+D.candidates.length+' 条轨迹';
-$('warning').textContent=D.demo?'合成 DEMO：用于检查搜索、几何验证与报告功能。分数为演示代理值，不是 NAVSIM PDMS，也不是实验收益。':'工程检查结果：评分来自 V1 正式入口。候选尚未完成全部严格验收，不可直接用作 teacher；当前初始 ego 与图像保持不变。';
+$('identity').textContent='Scene: '+D.token+' · 显示 '+D.candidates.length+' 条轨迹 · 搜索状态: '+(D.metadata.summary?.search_status||'unknown')+' · CEM候选: '+(D.metadata.summary?.search_unique_candidates??'unknown');
+$('warning').textContent=D.demo?'合成 DEMO：用于检查搜索、几何验证与报告功能。分数为演示代理值，不是 NAVSIM PDMS，也不是实验收益。':'工程检查结果：评分来自 V1 正式入口。缺帧物体按记录的速度界作条件性范围检查，并非真实运动保证；灰框仅显示已知时刻，未显示不代表不存在。全部候选未完成严格验收，不可直接用作 teacher。';
 D.candidates.forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.island+' / '+c.id.slice(0,8)+' / '+(100*c.metrics.score).toFixed(3)+' / '+(c.gate.checked_nominal_pass?'已实现的名义检查通过':'失败或不可核验');$('candidate').append(o)});
 $('candidate').value=C.id;
 function drawMap(){

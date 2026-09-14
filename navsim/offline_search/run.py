@@ -169,10 +169,10 @@ class DemoEvaluator:
 def run_scene(evaluator, token, out, config, metadata, demo):
     out.mkdir()
     start = time.perf_counter()
-    if getattr(evaluator, "unknown", []):
-        seeds, seed_notes = {}, [{"status": "scene_data_unverifiable", "reasons": evaluator.unknown}]
-    elif evaluator.gt.score + config.min_gain > 1:
+    if evaluator.gt.score + config.min_gain > 1:
         seeds, seed_notes = {}, [{"status": "gt_upper_bound"}]
+    elif getattr(evaluator, "unknown", []):
+        seeds, seed_notes = {}, [{"status": "structural_cache_error", "reasons": evaluator.unknown}]
     else:
         seeds, seed_notes = evaluator.seeds()
     # Stream metadata even if the process is interrupted; completed arrays saved below.
@@ -201,15 +201,38 @@ def run_scene(evaluator, token, out, config, metadata, demo):
                 arrays[c.id + "_" + key] = value
     np.savez_compressed(out / "engineering_candidates.npz", **arrays)
     failure_counts = Counter(reason for c in all_c for reason in c.gate["reasons"])
-    search_status = ("data_unverifiable" if getattr(evaluator, "unknown", []) else
-                     "gt_upper_bound" if evaluator.gt.score + config.min_gain > 1 else
-                     "nominal_improvement_found" if archive else "no_nominal_improvement_in_budget")
+    search_status = ("gt_upper_bound" if evaluator.gt.score + config.min_gain > 1 else
+                     "precheck_blocked" if getattr(evaluator, "unknown", []) else
+                     "search_not_started" if not all_c else
+                     "nominal_improvement_found" if archive else
+                     "no_verifiable_candidate_in_budget" if not any(c.gate.get('data_verifiable') for c in all_c) else
+                     "no_feasible_candidate_in_budget" if not any(c.passed for c in all_c) else
+                     "no_nominal_improvement_in_budget")
+    diagnostics = {'time_alignment': getattr(evaluator, 'time_diagnostics', None),
+                   'actors': evaluator.validator.lifecycle_diagnostics,
+                   'structural_cache_errors': getattr(evaluator, 'unknown', []),
+                   'map_limit_samples_gt': evaluator.gt.gate.get('speed_limit_diagnostics'),
+                   'scope': 'conditional engineering replay; not certified teacher data'}
+    dump(out / 'diagnostics.json', diagnostics)
+    # Partial-track poses are saved as NaN plus an explicit mask in NPZ, never as invented states.
+    actor_arrays = {}
+    for i, actor in enumerate(evaluator.actors):
+        actor_arrays[f'{i}_poses'] = actor.poses
+        actor_arrays[f'{i}_observed'] = actor.valid
+        actor_arrays[f'{i}_local_vertices'] = actor.local
+    np.savez_compressed(out / 'actor_replay.npz', **actor_arrays)
     summary = {"token": token, "status": "engineering_completed", "search_status": search_status, "demo": demo,
+               "schema_version": 2, "search_started": bool(all_c),
+               "search_generation_count": sum('generation' in row for row in trace),
+               "diagnostics_file": "diagnostics.json",
                "score_kind": "synthetic_proxy" if demo else "official_v1_pdms",
                "gt": evaluator.gt.record(), "roundtrip": evaluator.roundtrip.record(),
                "gt_command_replay_max_error": evaluator.replay_error,
                "roundtrip_score_delta": evaluator.roundtrip.score - evaluator.gt.score,
                "search_unique_candidates": len(all_c), "formal_calls_including_init_and_recheck": evaluator.evaluations,
+               "search_unique_control_evaluations": max((r.get('evaluations', 0) for r in trace), default=0),
+               "candidate_verifiable_count": sum(c.gate.get('data_verifiable', False) for c in all_c),
+               "failure_category_counts": dict(Counter(category for c in all_c for category in {reason.split(':')[0] for reason in c.gate['reasons']})),
                "checked_nominal_pass_count": sum(c.passed for c in all_c),
                "nominal_improvement_archive": [c.id for c in archive],
                "engineering_diverse_representatives": [c.id for c in selected],
@@ -296,20 +319,26 @@ def run(args):
             summary = run_scene(evaluator, token, args.output / folder, config, meta, demo)
             results.append({"token": token, "folder": folder, "status": summary["status"],
                 "search_status": summary["search_status"],
+                "search_started": summary['search_started'],
+                "search_unique_candidates": summary['search_unique_candidates'],
+                "checked_nominal_pass_count": summary['checked_nominal_pass_count'],
                 "gt_score": evaluator.gt.score, "nominal_improvements": len(summary["nominal_improvement_archive"]),
                 "diverse_representatives": len(summary["engineering_diverse_representatives"]),
                 "seconds": summary["seconds"]})
         except Exception as exc:
             error = {"token": token, "folder": folder, "status": "failed",
-                     "error": str(exc), "traceback": traceback.format_exc()}
+                     "search_status": "initialization_or_runtime_error",
+                     "error": str(exc), "traceback": traceback.format_exc(),
+                     "diagnostics": getattr(exc, 'diagnostics', None)}
             results.append(error)
             (args.output / folder).mkdir(exist_ok=True)
             dump(args.output / folder / "error.json", error)
             print(f"FAILED {token}: {exc}", flush=True)
         dump(args.output / "summary.json", {"requested": len(rows), "processed": len(results),
              "failed": sum(r["status"] == "failed" for r in results), "scenes": results,
+             "search_status_counts": dict(Counter(r.get('search_status', 'failed') for r in results)),
              "export_certified": False, "training_export_enabled": False})
-    links = ''.join('<tr><td>'+html.escape(r['token'])+'</td><td>'+html.escape(r['status'])+'</td><td>'+(
+    links = ''.join('<tr><td>'+html.escape(r['token'])+'</td><td>'+html.escape(r.get('search_status', r['status']))+'</td><td>'+(
         '<a href="'+r['folder']+'/report.html">轨迹检查</a>' if r['status']!='failed' else
         '<a href="'+r['folder']+'/error.json">失败详情</a>')+'</td></tr>' for r in results)
     (args.output / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>Offline search</title>'

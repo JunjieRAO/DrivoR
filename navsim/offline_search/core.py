@@ -22,6 +22,8 @@ class Config:
     min_interval: float = 0.0125
     dt: float = 0.1
     horizon: float = 4.0
+    # Explicit engineering reachability assumption, not a measured/legal limit.
+    missing_actor_speed_bound_mps: float = 55.0
 
     def __post_init__(self):
         if not (4 <= self.population <= 128 and 1 <= self.generations <= 20):
@@ -34,6 +36,8 @@ class Config:
             raise ValueError("safety margins must be positive")
         if not (0 < self.min_interval <= self.dt):
             raise ValueError("invalid minimum interval")
+        if not np.isfinite(self.missing_actor_speed_bound_mps) or self.missing_actor_speed_bound_mps < 55:
+            raise ValueError("missing actor engineering speed bound must be at least 55 m/s")
 
 
 KNOTS = np.array([0., .5, 1., 2., 3., 4.])
@@ -168,6 +172,7 @@ def search(config: Config, token: str, gt: Candidate, seeds: dict[str, np.ndarra
                 std = np.maximum(FLOOR, .5 * std)
             trace.append({"island": island, "generation": generation,
                           "feasible": len(feasible), "population": len(batch),
+                          "verifiable": sum(c.gate.get('data_verifiable', False) for _, c in batch),
                           "best_score": None if best is None else best.score,
                           "sampler_fallback": fallback, "evaluations": len(theta_cache)})
     # Island quotas protect small modes; archive contains all generations.

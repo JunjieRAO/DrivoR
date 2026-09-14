@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
 WORK_ROOT="${WORK_ROOT:-$REPO_ROOT/exp/offline_search/nav1_engineering}"
+# Reuse the original manifests/cache; choose a fresh result destination on reruns.
+RESULT_ROOT="${RESULT_ROOT:-$WORK_ROOT}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/nuplan-devkit${PYTHONPATH:+:$PYTHONPATH}"
 export NUPLAN_MAP_VERSION=nuplan-maps-v1.0
@@ -37,7 +39,7 @@ case "${1:-help}" in
     "$PYTHON_BIN" -m navsim.offline_search.run run \
       --manifest "$manifest" --map-root "$NUPLAN_MAPS_ROOT" \
       --population "$population" --generations "$generations" \
-      --seed "${SEARCH_SEED:-20260914}" --output "$WORK_ROOT/${mode}_results"
+      --seed "${SEARCH_SEED:-20260914}" --output "$RESULT_ROOT/${mode}_results"
     ;;
   *)
     printf '%s\n' 'Usage: bash scripts/offline_search/nav1_engineering.sh {verify|prepare|smoke|full}'

@@ -21,7 +21,8 @@ from navsim.planning.simulation.planner.pdm_planner.simulation.batch_lqr import 
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
 from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representation import ego_state_to_state_array
 from .core import Candidate, candidate_id, BOUNDS, basis, residual
-from .geometry import Actor, NominalValidator, angle_delta, vertices
+from .geometry import NominalValidator, angle_delta, vertices
+from .adapter_data import cached_actors, frame_clock, speed_limit_at
 
 
 class RecordingTracker(BatchLQRTracker):
@@ -67,51 +68,6 @@ def local_to_world(poses, origin):
     return out
 
 
-def cached_actors(observation):
-    """Reconstruct rigid boxes without ignoring responsibility or collided IDs.
-
-    This checks cached replay only. Completeness against raw annotations remains
-    a separate gate, so none of these outputs are certified teacher labels.
-    """
-    if observation._observation_sample_res != 1 or abs(observation._sample_interval - .1) > 1e-9:
-        raise ValueError("Strict interval checks require a 10 Hz cache with observation_sample_res=1")
-    maps = [observation[i] for i in range(41)]
-    ids = sorted(set().union(*(set(m.tokens) for m in maps)))
-    actors, unknown = [], []
-    for token in ids:
-        if token.startswith(observation.red_light_token):
-            continue
-        if not all(token in m.tokens for m in maps):
-            unknown.append("actor_lifecycle_unverifiable:" + token)
-            continue
-        first = maps[0][token]
-        xy = np.asarray(first.exterior.coords)[:-1]
-        if xy.shape != (4, 2):
-            unknown.append("non_box_actor_unverifiable:" + token)
-            continue
-        center = np.asarray(first.centroid.coords)[0]
-        local = xy - center
-        base_angle = np.arctan2(local[0, 1], local[0, 0])
-        poses = []
-        for m in maps:
-            polygon = m[token]
-            curr = np.asarray(polygon.exterior.coords)[:-1]
-            c = np.asarray(polygon.centroid.coords)[0]
-            if curr.shape != (4, 2):
-                break
-            yaw = angle_delta(base_angle, np.arctan2(*(curr[0] - c)[::-1]))
-            pose = np.array([*c, yaw])
-            # Refuse non-rigid/mismatched vertex ordering rather than guess.
-            if np.max(np.abs(vertices(pose, local) - curr)) > 1e-4:
-                break
-            poses.append(pose)
-        if len(poses) != 41:
-            unknown.append("non_rigid_actor_unverifiable:" + token)
-        else:
-            actors.append(Actor(token, np.asarray(poses), local))
-    return actors, unknown
-
-
 class OfficialEvaluator:
     def __init__(self, scene, cache, config):
         self.scene, self.cache, self.config = scene, cache, config
@@ -125,9 +81,7 @@ class OfficialEvaluator:
         frames = scene.frames[i:i + 11]
         if len(frames) != 11:
             raise ValueError("Need current frame plus 10 future frames (5 seconds)")
-        times = (np.array([f.timestamp for f in frames]) - frames[0].timestamp) / 1e6
-        if not np.allclose(times, np.arange(11) * .5, atol=.002, rtol=0):
-            raise ValueError("raw scene timestamp spacing disagrees with 2 Hz GT")
+        self.time_diagnostics = frame_clock([f.timestamp for f in frames])
         pose_error = np.linalg.norm(frames[0].ego_status.ego_pose[:2] - self.origin[:2])
         yaw_error = abs(angle_delta(frames[0].ego_status.ego_pose[2], self.origin[2]))
         if pose_error > .001 or yaw_error > .001 or abs(frames[0].timestamp - cache.ego_state.time_point.time_us) > 2000:
@@ -152,7 +106,9 @@ class OfficialEvaluator:
             token, layer = dm.tokens[j], dm.map_types[j]
             lane = scene.map_api.get_map_object(token, layer)
             limit = getattr(lane, "speed_limit_mps", None)
-            self.lanes.append((dm[token], float(limit) if limit is not None else np.nan))
+            self.lanes.append({'id': token, 'layer': layer.name, 'polygon': dm[token],
+                               'on_route': token in cache.route_lane_ids,
+                               'limit_mps': float(limit) if limit is not None and np.isfinite(limit) and limit > 0 else None})
         self.validator = NominalValidator(config, self.ego_local, self.actors, self.road,
                 self.gt_path, self.vehicle.wheel_base, self.unknown, self.speed_limit)
         self.evaluations = 0
@@ -174,8 +130,7 @@ class OfficialEvaluator:
 
     def speed_limit(self, state):
         center = Polygon(vertices(state[:3], self.ego_local)).centroid
-        limits = [limit for polygon, limit in self.lanes if polygon.covers(center)]
-        return min(limits) if limits and np.isfinite(limits).all() else np.nan
+        return speed_limit_at(self.lanes, center)
 
     def evaluate_poses(self, poses):
         poses = np.asarray(poses, dtype=float)
