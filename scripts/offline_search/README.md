@@ -1,3 +1,37 @@
+## Scene-level CPU parallelism
+
+`run` and `demo` accept `--workers` (default 1) and `--worker-threads` (default 1).
+The server wrapper exposes these as `SEARCH_WORKERS` and `WORKER_THREADS`:
+
+```bash
+export SEARCH_WORKERS=4
+export WORKER_THREADS=1
+export RESULT_ROOT=/mnt/workspace/roa7sgh/DrivoR/exp/offline_search/nav1_engineering_parallel
+bash scripts/offline_search/nav1_engineering.sh full
+```
+
+This starts up to four independent scene processes. Actual workers are capped by
+scene count, so the one-scene smoke run still uses one worker. Start with four
+workers, then compare wall time and memory before increasing the count. Each
+process loads its own scene, map, simulator and scorer; memory grows with workers.
+Candidate/island search remains sequential within each scene and its seed is unchanged.
+
+All runs, including one worker, use fresh `spawn` processes. Native BLAS/OpenMP
+thread environment variables are set before child imports to avoid nested thread
+oversubscription; this is not CPU affinity or a guarantee for libraries that do
+not honor those variables. `execution.json` records requested/effective workers
+and thread settings; scene reports record worker PID and inherited settings.
+The parent alone writes root summaries in manifest order; individual scene
+failures are recorded and cause exit code 2. Existing output directories are
+never overwritten. There is no resume or single-scene parallel search yet.
+
+The generic Bash/PowerShell wrappers forward the same CLI flags. For a synthetic
+parallel correctness check without NAVSIM data:
+
+```bash
+bash scripts/offline_search/run_engineering.sh demo --scene-count 2 --workers 2 --worker-threads 1 --output /tmp/drivor_parallel_demo
+```
+
 Terminal heading gate: final executed heading error relative to the cached route centerline must not exceed spatially aligned 5-second GT rollout heading error plus 1 degree. Invalid/non-simple route, reversed GT progress, or unavailable GT coverage is unverifiable. Report endpoint rays: orange dashed = route tangent, green = candidate heading. No lateral-return constraint is added.
 
 GT speed reference now uses a separate 5-second GT rollout from the available 10 future poses; candidate formal scoring remains 4 seconds. No endpoint extrapolation is used.

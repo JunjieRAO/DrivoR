@@ -39,6 +39,7 @@ case "${1:-help}" in
     "$PYTHON_BIN" -m navsim.offline_search.run run \
       --manifest "$manifest" --map-root "$NUPLAN_MAPS_ROOT" \
       --population "$population" --generations "$generations" \
+      --workers "${SEARCH_WORKERS:-1}" --worker-threads "${WORKER_THREADS:-1}" \
       --seed "${SEARCH_SEED:-20260914}" --output "$RESULT_ROOT/${mode}_results"
     ;;
   *)

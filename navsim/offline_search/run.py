@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 from dataclasses import asdict
 from functools import lru_cache
 import hashlib
@@ -263,6 +265,70 @@ def run_scene(evaluator, token, out, config, metadata, demo):
     return summary
 
 
+THREAD_ENV_KEYS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS")
+
+
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def scene_job(index, row, total, output, config, env, demo):
+    """One isolated evaluator per scene; only the parent writes the root summary."""
+    setup_start = time.perf_counter()
+    token = row["token"]
+    # Token is data, not a path segment.
+    folder = f"{index:02d}_" + hashlib.sha256(token.encode()).hexdigest()[:12]
+    print(f"[{index + 1}/{total}] {token}", flush=True)
+    try:
+        if demo:
+            evaluator = DemoEvaluator(config)
+            meta = {"environment": env}
+        else:
+            from navsim.common.dataclasses import Scene, SensorConfig
+            from .official import OfficialEvaluator
+            if not row.get("metric_cache"):
+                raise FileNotFoundError("metric_cache_missing")
+            with open(row["source_log"], "rb") as f:
+                frames = pickle.load(f)
+            start = row["frame_start"]
+            raw = frames[start:start + 14]
+            if len(raw) != 14 or raw[3]["token"] != token or raw[3]["log_name"] != row["log_name"]:
+                raise ValueError("manifest/raw log mismatch")
+            scene = Scene.from_scene_dict_list(raw, None, 4, 10, SensorConfig.build_no_sensors())
+            with lzma.open(row["metric_cache"], "rb") as f:
+                cache = pickle.load(f)
+            evaluator = OfficialEvaluator(scene, cache, config)
+            meta = {"source": row, "environment": env,
+                    "log_sha256": fingerprint(row["source_log"]),
+                    "cache_sha256": fingerprint(row["metric_cache"]),
+                    "map_root": os.environ.get("NUPLAN_MAPS_ROOT"),
+                    "vehicle": vars(evaluator.vehicle)}
+        meta["worker"] = {"pid": os.getpid(), "thread_environment": {k: os.environ.get(k) for k in THREAD_ENV_KEYS}}
+        meta["setup_seconds"] = time.perf_counter() - setup_start
+        summary = run_scene(evaluator, token, output / folder, config, meta, demo)
+        return {"token": token, "folder": folder, "status": summary["status"],
+            "search_status": summary["search_status"],
+            "search_started": summary['search_started'],
+            "search_unique_candidates": summary['search_unique_candidates'],
+            "checked_nominal_pass_count": summary['checked_nominal_pass_count'],
+            "gt_score": evaluator.gt.score, "nominal_improvements": len(summary["nominal_improvement_archive"]),
+            "diverse_representatives": len(summary["engineering_diverse_representatives"]),
+            "seconds": summary["seconds"], "qualified_count": summary["qualified_count"]}
+    except Exception as exc:
+        error = {"token": token, "folder": folder, "status": "failed",
+                 "search_status": "initialization_or_runtime_error",
+                 "error": str(exc), "traceback": traceback.format_exc(),
+                 "diagnostics": getattr(exc, 'diagnostics', None)}
+        (output / folder).mkdir(exist_ok=True)
+        dump(output / folder / "error.json", error)
+        print(f"FAILED {token}: {exc}", flush=True)
+        return error
+
+
 def run(args):
     config = Config(seed=args.seed, population=args.population, generations=args.generations)
     args.output.mkdir(parents=True, exist_ok=False)
@@ -271,7 +337,8 @@ def run(args):
     dump(args.output / "config.json", asdict(config))
     demo = args.command == "demo"
     if demo:
-        rows = [{"token": "SYNTHETIC_DEMO", "declared_split": "synthetic"}]
+        rows = [{"token": "SYNTHETIC_DEMO" if i == 0 else f"SYNTHETIC_DEMO_{i}",
+                 "declared_split": "synthetic"} for i in range(getattr(args, "scene_count", 1))]
     else:
         rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
         if not rows or len(rows) > 16:
@@ -285,60 +352,62 @@ def run(args):
         if args.map_root:
             os.environ["NUPLAN_MAPS_ROOT"] = str(args.map_root.resolve())
         dump(args.output / "manifest.json", rows)
-    results = []
-    for index, row in enumerate(rows):
-        setup_start = time.perf_counter()
-        token = row["token"]
-        # Token is data, not a path segment.
-        folder = f"{index:02d}_" + hashlib.sha256(token.encode()).hexdigest()[:12]
-        print(f"[{index + 1}/{len(rows)}] {token}", flush=True)
-        try:
-            if demo:
-                evaluator = DemoEvaluator(config)
-                meta = {"environment": env}
-            else:
-                from navsim.common.dataclasses import Scene, SensorConfig
-                from .official import OfficialEvaluator
-                if not row.get("metric_cache"):
-                    raise FileNotFoundError("metric_cache_missing")
-                with open(row["source_log"], "rb") as f:
-                    frames = pickle.load(f)
-                start = row["frame_start"]
-                raw = frames[start:start + 14]
-                if len(raw) != 14 or raw[3]["token"] != token or raw[3]["log_name"] != row["log_name"]:
-                    raise ValueError("manifest/raw log mismatch")
-                scene = Scene.from_scene_dict_list(raw, None, 4, 10, SensorConfig.build_no_sensors())
-                with lzma.open(row["metric_cache"], "rb") as f:
-                    cache = pickle.load(f)
-                evaluator = OfficialEvaluator(scene, cache, config)
-                meta = {"source": row, "environment": env,
-                        "log_sha256": fingerprint(row["source_log"]),
-                        "cache_sha256": fingerprint(row["metric_cache"]),
-                        "map_root": os.environ.get("NUPLAN_MAPS_ROOT"),
-                        "vehicle": vars(evaluator.vehicle)}
-            meta["setup_seconds"] = time.perf_counter() - setup_start
-            summary = run_scene(evaluator, token, args.output / folder, config, meta, demo)
-            results.append({"token": token, "folder": folder, "status": summary["status"],
-                "search_status": summary["search_status"],
-                "search_started": summary['search_started'],
-                "search_unique_candidates": summary['search_unique_candidates'],
-                "checked_nominal_pass_count": summary['checked_nominal_pass_count'],
-                "gt_score": evaluator.gt.score, "nominal_improvements": len(summary["nominal_improvement_archive"]),
-                "diverse_representatives": len(summary["engineering_diverse_representatives"]),
-                "seconds": summary["seconds"]})
-        except Exception as exc:
-            error = {"token": token, "folder": folder, "status": "failed",
-                     "search_status": "initialization_or_runtime_error",
-                     "error": str(exc), "traceback": traceback.format_exc(),
-                     "diagnostics": getattr(exc, 'diagnostics', None)}
-            results.append(error)
-            (args.output / folder).mkdir(exist_ok=True)
-            dump(args.output / folder / "error.json", error)
-            print(f"FAILED {token}: {exc}", flush=True)
-        dump(args.output / "summary.json", {"requested": len(rows), "processed": len(results),
-             "failed": sum(r["status"] == "failed" for r in results), "scenes": results,
-             "search_status_counts": dict(Counter(r.get('search_status', 'failed') for r in results)),
+    requested_workers = positive_int(getattr(args, "workers", 1))
+    threads = positive_int(getattr(args, "worker_threads", 1))
+    effective_workers = min(requested_workers, len(rows))
+    execution = {"requested_workers": requested_workers, "effective_workers": effective_workers,
+                 "worker_threads": threads, "start_method": "spawn",
+                 "thread_environment": {key: str(threads) for key in THREAD_ENV_KEYS}}
+    dump(args.output / "execution.json", execution)
+    results_by_index = {}
+    def save_progress():
+        ordered = [results_by_index[i] for i in sorted(results_by_index)]
+        dump(args.output / "summary.json", {"requested": len(rows), "processed": len(ordered),
+             "failed": sum(r["status"] == "failed" for r in ordered), "scenes": ordered,
+             "execution": execution,
+             "search_status_counts": dict(Counter(r.get('search_status', 'failed') for r in ordered)),
              "export_certified": False, "training_export_enabled": False})
+    save_progress()
+    previous_env = {key: os.environ.get(key) for key in THREAD_ENV_KEYS}
+    try:
+        # Set before spawn imports NumPy. Even one worker is a fresh isolated process.
+        os.environ.update(execution["thread_environment"])
+        with ProcessPoolExecutor(max_workers=effective_workers,
+                                 mp_context=multiprocessing.get_context("spawn")) as pool:
+            futures = {pool.submit(scene_job, i, row, len(rows), args.output, config, env, demo): i
+                       for i, row in enumerate(rows)}
+            for future in as_completed(futures):
+                i = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    folder = f"{i:02d}_" + hashlib.sha256(rows[i]["token"].encode()).hexdigest()[:12]
+                    result = {"token": rows[i]["token"], "folder": folder, "status": "failed",
+                              "search_status": "worker_process_error", "error": str(exc),
+                              "traceback": traceback.format_exc()}
+                    (args.output / folder).mkdir(exist_ok=True)
+                    dump(args.output / folder / "error.json", result)
+                results_by_index[i] = result
+                save_progress()
+    except Exception as exc:
+        # Pool startup or submission failure: account for every unfinished scene.
+        for i, row in enumerate(rows):
+            if i not in results_by_index:
+                folder = f"{i:02d}_" + hashlib.sha256(row["token"].encode()).hexdigest()[:12]
+                error = {"token": row["token"], "folder": folder, "status": "failed",
+                         "search_status": "worker_process_error", "error": str(exc),
+                         "traceback": traceback.format_exc()}
+                (args.output / folder).mkdir(exist_ok=True)
+                dump(args.output / folder / "error.json", error)
+                results_by_index[i] = error
+        save_progress()
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    results = [results_by_index[i] for i in sorted(results_by_index)]
     links = ''.join('<tr><td>'+html.escape(r['token'])+'</td><td>'+html.escape(r.get('search_status', r['status']))+'</td><td>'+(
         '<a href="'+r['folder']+'/report.html">轨迹检查</a>' if r['status']!='failed' else
         '<a href="'+r['folder']+'/error.json">失败详情</a>')+'</td></tr>' for r in results)
@@ -365,6 +434,10 @@ def main():
         p.add_argument("--seed", type=int, default=20260914)
         p.add_argument("--population", type=int, default=8 if name == "demo" else 32)
         p.add_argument("--generations", type=int, default=2 if name == "demo" else 5)
+        p.add_argument("--workers", type=positive_int, default=1, help="Concurrent scene processes (default: 1)")
+        p.add_argument("--worker-threads", type=positive_int, default=1, help="Native compute threads per process")
+        if name == "demo":
+            p.add_argument("--scene-count", type=int, choices=range(1, 17), default=1)
         if name == "run":
             p.add_argument("--manifest", type=Path, required=True)
             p.add_argument("--map-root", type=Path)

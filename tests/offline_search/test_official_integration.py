@@ -49,7 +49,9 @@ def test_official_pair_scoring_recording_and_replay():
     future = local_to_world(np.c_[np.arange(11) * 3., np.zeros((11, 2))], origin)
     frames = [SimpleNamespace(timestamp=1_000_000+500_000*i, ego_status=SimpleNamespace(ego_pose=p)) for i,p in enumerate(future)]
     scene = SimpleNamespace(scene_metadata=SimpleNamespace(num_history_frames=1), frames=frames,
-        get_future_trajectory=lambda n: gt,
+        get_future_trajectory=lambda n: Trajectory(
+            np.c_[np.arange(1, n + 1) * 3., np.zeros((n, 2))],
+            TrajectorySampling(num_poses=n, interval_length=.5)),
         map_api=SimpleNamespace(get_map_object=lambda *args: SimpleNamespace(speed_limit_mps=13.9)))
     evaluator = OfficialEvaluator(scene, cache, Config(population=4, generations=1))
     plain = pdm_score(cache, gt, sampling, PDMSimulator(sampling), PDMScorer(sampling, vehicle_parameters=vehicle))
