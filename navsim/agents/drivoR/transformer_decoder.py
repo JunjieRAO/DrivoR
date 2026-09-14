@@ -4,6 +4,7 @@ import numpy as np
 from torch.jit import Final
 from typing import Any, Callable, Dict, Optional, Set, Tuple, Type, Union, List
 from .layers.utils.mlp import MLP
+from .score_module.spatial_sampler import LocalPatchSampler
 from .timm_layers import (
     Mlp,
     DropPath,
@@ -169,19 +170,61 @@ class TransformerDecoderScorer(torch.nn.Module):
         self.layers = torch.nn.ModuleList(_layers)
         self.return_intermediate = False
 
+        self.use_local_patch_branch = getattr(config, "use_local_patch_branch", False)
+        self.local_fusion_alpha = getattr(config, "local_fusion_alpha", 1.0)
 
-    def forward(self, x, x_cross):
+        if self.use_local_patch_branch:
+            num_heads = getattr(config, "spatial_patch_num_heads", 4)
+            num_poses = getattr(config, "num_poses", 8)
+            sigma = getattr(config, "spatial_patch_sigma", 0.15)
+            image_size = tuple(getattr(config, "image_size", (1148, 672)))
+
+            self.local_patch_sampler = LocalPatchSampler(
+                d_model=d_model,
+                num_heads=num_heads,
+                num_poses=num_poses,
+                sigma=sigma,
+                image_size=image_size,
+            )
+            self.local_fusion_proj = nn.Linear(d_model, d_model)
+            nn.init.zeros_(self.local_fusion_proj.weight)
+            if self.local_fusion_proj.bias is not None:
+                nn.init.zeros_(self.local_fusion_proj.bias)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        x_cross: torch.Tensor,
+        proposals: Optional[torch.Tensor] = None,
+        patch_features: Optional[torch.Tensor] = None,
+        cam_K: Optional[torch.Tensor] = None,
+        world_2_cam: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         
         intermediate = []
+        h_global = x
         for _, layer in enumerate(self.layers):
-            x = layer(x, x_cross)
+            h_global = layer(h_global, x_cross)
             if self.return_intermediate:
-                intermediate.append(x)
+                intermediate.append(h_global)
 
         if self.return_intermediate:
-            return torch.stack(intermediate)
+            h_global_out = torch.stack(intermediate)
         else:
-            return x
+            h_global_out = h_global
+
+        if (
+            self.use_local_patch_branch
+            and proposals is not None
+            and patch_features is not None
+            and cam_K is not None
+            and world_2_cam is not None
+        ):
+            h_local = self.local_patch_sampler(x, proposals, patch_features, cam_K, world_2_cam)
+            h_fused = h_global_out + self.local_fusion_alpha * self.local_fusion_proj(h_local)
+            return h_fused
+
+        return h_global_out
 
 
 

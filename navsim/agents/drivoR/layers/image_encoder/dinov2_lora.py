@@ -356,7 +356,7 @@ class ImgEncoder(torch.nn.Module):
 
     
     # def forward(self, data_dict):
-    def forward(self, img, scene_tokens):
+    def forward(self, img, scene_tokens, return_patches: bool = False):
 
 
         B, N, C, H, W = img.size()
@@ -384,6 +384,7 @@ class ImgEncoder(torch.nn.Module):
             tokens = self.pool_proj(tokens.transpose(1, 2))  # shape: (B*N, D, T) → (B*N, D, num_prefix_tokens)
             # print("self.use_feature_pooling: ", self.use_feature_pooling)
             tokens = tokens.transpose(1, 2)  # → (B*N, num_prefix_tokens, D)
+            prefix_tokens_raw = tokens
         elif self.focus_front_cam:
             B_, T, D = tokens.shape  # (B*N, num_tokens, dim)
             tokens = rearrange(tokens, '(b n) t c -> b n t c', b=B, n=N)
@@ -396,14 +397,22 @@ class ImgEncoder(torch.nn.Module):
             # first K tokens from every other camera: [B, N-1, K, D] -> [B, (N-1)*K, D]
             others = tokens[:, 1:, :self.num_prefix_tokens, :].reshape(B, -1, D)
             # concatenate per batch, preserving order: front first, then cam1..camN-1 prefixes
-            tokens = torch.cat([front, others], dim=1)  # [B, (N-1)*K, D]
+            prefix_tokens_raw = torch.cat([front, others], dim=1)  # [B, (N-1)*K, D]
         elif self.num_prefix_tokens > 0:
-            tokens = tokens[:,:self.num_prefix_tokens]
+            prefix_tokens_raw = tokens[:,:self.num_prefix_tokens]
         else:
-            tokens = tokens
+            prefix_tokens_raw = tokens
 
-        tokens = self.neck(tokens)
+        scene_tokens_out = self.neck(prefix_tokens_raw)
         if not self.focus_front_cam:
-            tokens = rearrange(tokens, '(b n) t c -> b (n t) c', b=B, n=N)
+            scene_tokens_out = rearrange(scene_tokens_out, '(b n) t c -> b (n t) c', b=B, n=N)
 
-        return tokens
+        if return_patches:
+            H_grid = H // self.patch_size
+            W_grid = W // self.patch_size
+            raw_patch_tokens = tokens[:, -(H_grid * W_grid):]
+            patch_tokens_out = self.neck(raw_patch_tokens)
+            patch_tokens_out = rearrange(patch_tokens_out, '(b n) (h w) c -> b n h w c', b=B, n=N, h=H_grid, w=W_grid)
+            return scene_tokens_out, patch_tokens_out
+
+        return scene_tokens_out

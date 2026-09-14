@@ -84,6 +84,10 @@ config:
 
   ####################
   # scorer params
+  use_local_patch_branch: true
+  local_fusion_alpha: 1.0
+  spatial_patch_num_heads: 4
+  spatial_patch_sigma: 0.15
   double_score: false
   agent_pred: false
   area_pred: false

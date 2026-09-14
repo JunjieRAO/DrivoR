@@ -131,9 +131,11 @@ class DrivoRModel(nn.Module):
 
         batch_size = ego_status.shape[0]
 
-
+        cam_K = features.get("cam_K", None)
+        world_2_cam = features.get("world_2_cam", None)
 
         scene_features = []
+        patch_features = None
         # image features
         if self.num_cams > 0:
             
@@ -145,7 +147,11 @@ class DrivoRModel(nn.Module):
                 raise ValueError
 
             scene_tokens = self.scene_embeds.repeat(batch_size, 1, 1, 1)
-            image_scene_tokens = self.image_backbone(img, scene_tokens)
+            use_local_branch = getattr(self._config, "use_local_patch_branch", False)
+            if use_local_branch:
+                image_scene_tokens, patch_features = self.image_backbone(img, scene_tokens, return_patches=True)
+            else:
+                image_scene_tokens = self.image_backbone(img, scene_tokens)
 
             log.debug(f"Backbone image - {image_scene_tokens.shape}")
             scene_features.append(image_scene_tokens)
@@ -186,7 +192,14 @@ class DrivoRModel(nn.Module):
         B,N,_,_=proposals.shape
 
         embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
+        tr_out = self.scorer_attention(
+            embedded_traj,
+            scene_features,
+            proposals=proposals,
+            patch_features=patch_features,
+            cam_K=cam_K,
+            world_2_cam=world_2_cam,
+        )  # (B, N, d_model)
         tr_out = tr_out+ego_token
         pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
 
