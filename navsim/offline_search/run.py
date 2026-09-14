@@ -234,6 +234,7 @@ def run_scene(evaluator, token, out, config, metadata, demo):
                "candidate_verifiable_count": sum(c.gate.get('data_verifiable', False) for c in all_c),
                "failure_category_counts": dict(Counter(category for c in all_c for category in {reason.split(':')[0] for reason in c.gate['reasons']})),
                "checked_nominal_pass_count": sum(c.passed for c in all_c),
+               "qualified_count": len({c.id for c in all_c if c.passed and c.score >= evaluator.gt.score + config.min_gain}),
                "nominal_improvement_archive": [c.id for c in archive],
                "engineering_diverse_representatives": [c.id for c in selected],
                "failure_counts": dict(failure_counts),

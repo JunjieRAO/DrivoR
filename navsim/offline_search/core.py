@@ -172,6 +172,7 @@ def search(config: Config, token: str, gt: Candidate, seeds: dict[str, np.ndarra
                 std = np.maximum(FLOOR, .5 * std)
             trace.append({"island": island, "generation": generation,
                           "feasible": len(feasible), "population": len(batch),
+                          "qualified": len({c.id for _, c in batch if c.passed and c.score >= gt.score + config.min_gain}),
                           "verifiable": sum(c.gate.get('data_verifiable', False) for _, c in batch),
                           "best_score": None if best is None else best.score,
                           "sampler_fallback": fallback, "evaluations": len(theta_cache)})
