@@ -122,10 +122,11 @@ class OfficialEvaluator:
                                'on_route': token in cache.route_lane_ids,
                                'limit_mps': float(limit) if limit is not None and np.isfinite(limit) and limit > 0 else None})
         self.gt_terminal_speed = None
+        self.gt_initial_speed = None
         self.validator = NominalValidator(config, self.ego_local, self.actors, self.road,
                 self.gt_path, self.vehicle.wheel_base, self.unknown, self.speed_limit,
                 lambda state: terminal_heading_check(state, self.gt_speed_states, cache.centerline.linestring),
-                lambda state: terminal_speed_check(state, self.gt_terminal_speed))
+                lambda state: terminal_speed_check(state, self.gt_terminal_speed, self.gt_initial_speed))
         self.evaluations = 0
         self.gt = self.evaluate_poses(self.gt_poses)
         self.gt.island = "GT"
@@ -165,6 +166,7 @@ class OfficialEvaluator:
                                      self.sampling, self.cache.ego_state.time_point)
         if self.gt_terminal_speed is None:
             self.gt_terminal_speed = float(executed[-1, 3])
+            self.gt_initial_speed = float(executed[0, 3])
         gate = self.validator.check(executed, metrics)
         gate["tracking_rms_xy"] = float(np.sqrt(np.mean(np.sum((ref[:, :2] - executed[:, :2]) ** 2, axis=1))))
         self.evaluations += 1

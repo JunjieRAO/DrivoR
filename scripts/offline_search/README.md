@@ -1,6 +1,11 @@
 ## Updated final selection policy
 
-Every official candidate must satisfy terminal speed <= original four-second GT
+Only scenes satisfying (GT speed drop > 1 m/s AND relative drop > 10%) OR
+relative drop > 20% from 0 to 4 seconds enable this gate. All comparisons are strict.
+Relative drop uses GT initial speed; zero initial speed does not trigger the gate. Constant-speed, accelerating, and smaller net-drop scenes skip it.
+The decision uses GT only, not candidate speed or inferred leading actors. Diagnostics
+record enabled, initial/final GT speeds, drop, and threshold. Enabled candidates
+must satisfy terminal speed <= original four-second GT
 rollout terminal speed + min(0.5 m/s, 10% of that GT speed); numerical tolerance
 is 1e-8 m/s. Existing path coverage and heading gates remain in place.
 For GT PDMS >= 0.95, any strictly higher PDMS qualifies after constraints pass.

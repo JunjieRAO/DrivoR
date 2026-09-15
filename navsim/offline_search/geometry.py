@@ -259,14 +259,27 @@ def terminal_heading_check(state, gt_states, route, tolerance_deg=1.):
     return result
 
 
-def terminal_speed_check(state, gt_speed):
+def terminal_speed_check(state, gt_speed, gt_initial_speed):
+    """Gate on (absolute drop > 1 m/s AND relative drop > 10%) OR relative drop > 20%."""
     speed = float(state[3])
-    if not np.isfinite(gt_speed) or not np.isfinite(speed) or gt_speed < -1e-8:
-        return {'passed': False, 'reason': 'terminal_speed_unverifiable'}
+    if not np.isfinite([gt_speed, gt_initial_speed, speed]).all() or min(gt_speed, gt_initial_speed) < -1e-8:
+        return {'passed': False, 'reason': 'terminal_speed_unverifiable', 'enabled': None}
     reference = max(0., float(gt_speed))
+    initial = max(0., float(gt_initial_speed))
+    drop = initial - reference
+    relative_drop = drop / initial if initial > 0. else 0.
+    enabled = ((drop > 1. and relative_drop > .1) or relative_drop > .2)
+    result = {'enabled': bool(enabled), 'gt_initial_speed_mps': initial,
+              'gt_speed_4s_mps': reference, 'gt_speed_drop_mps': drop,
+              'gt_relative_speed_drop': relative_drop,
+              'deceleration_rule': '(drop_mps > 1 and relative_drop > 0.1) or relative_drop > 0.2',
+              'candidate_speed_mps': speed,
+              'numerical_tolerance_mps': 1e-8}
+    if not enabled:
+        return {**result, 'passed': True, 'reason': None,
+                'skip_reason': 'gt_not_clearly_decelerating', 'delta_mps': None, 'limit_mps': None}
     delta = min(.5, .1 * reference)
     limit = reference + delta
     passed = speed <= limit + 1e-8
-    return {'passed': bool(passed), 'reason': None if passed else 'terminal_speed',
-            'candidate_speed_mps': speed, 'gt_speed_4s_mps': reference,
-            'delta_mps': delta, 'limit_mps': limit, 'numerical_tolerance_mps': 1e-8}
+    return {**result, 'passed': bool(passed), 'reason': None if passed else 'terminal_speed',
+            'delta_mps': delta, 'limit_mps': limit}
