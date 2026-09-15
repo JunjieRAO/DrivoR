@@ -1,4 +1,4 @@
-"""Prepare the 16-scene engineering run using the repository's NAV1 splits.
+"""Prepare a log-balanced engineering run using the repository's NAV1 splits.
 
 Generate official metric_cache.MetricCache objects, not train_metric_chache objects.
 """
@@ -14,7 +14,7 @@ import traceback
 import yaml
 
 from .core import stable_seed
-from .run import dump, fingerprint
+from .run import dump, fingerprint, positive_int
 
 
 def select_rows(repo, scene_root, count, seed):
@@ -64,7 +64,7 @@ def main():
     p.add_argument('--repo', type=Path, required=True)
     p.add_argument('--scene-root', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
-    p.add_argument('--count', type=int, choices=range(1, 17), default=16)
+    p.add_argument('--count', type=positive_int, default=16)
     p.add_argument('--seed', type=int, default=20260914)
     args = p.parse_args()
     # Check imports before creating a run directory; no model/checkpoint required.

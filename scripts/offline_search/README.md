@@ -1,3 +1,13 @@
+## Larger engineering batches
+
+Preparation --count accepts positive integers, including 128/256. The runner no
+longer caps manifests at 16 rows. Log balancing (at most two scenes per log),
+train-only filtering, and output no-overwrite checks remain. This is not an
+all-training-data/resumable pipeline. Preparation remains serial; SEARCH_WORKERS
+controls search only. SEARCH_POPULATION and SEARCH_GENERATIONS override full-run
+search budgets (defaults remain 16 and 3). Use a new WORK_ROOT for a new manifest.
+Inspect preparation_summary.json for actual selected count and cache failures.
+
 ## Updated final selection policy
 
 Only scenes satisfying (GT speed drop > 1 m/s AND relative drop > 10%) OR

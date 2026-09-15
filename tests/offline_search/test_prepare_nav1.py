@@ -25,3 +25,18 @@ def test_navtrain_selection_excludes_validation_logs_even_if_in_training(tmp_pat
     assert {r['log_name'] for r in rows} == {'training_a', 'training_b'}
     assert rows == select_rows(tmp_path, scene_dir, 16, 123)
     assert all(r['metric_cache'] is None for r in rows)
+
+
+def test_selection_supports_128_distinct_logs(tmp_path):
+    scene_dir=tmp_path/'logs'; scene_dir.mkdir()
+    filters=tmp_path/'navsim/planning/script/config/common/train_test_split/scene_filter'
+    training=tmp_path/'navsim/planning/script/config/training'
+    filters.mkdir(parents=True); training.mkdir(parents=True)
+    logs=[f'log_{i}' for i in range(128)]; tokens=[]
+    for log in logs:
+        frames=[{'token':f'{log}_{i}', 'log_name':log, 'roadblock_ids':['road']} for i in range(14)]
+        (scene_dir/f'{log}.pkl').write_bytes(pickle.dumps(frames)); tokens.append(frames[3]['token'])
+    (filters/'navtrain.yaml').write_text(json.dumps({'tokens':tokens,'log_names':logs}))
+    (training/'default_train_val_test_log_split.yaml').write_text(json.dumps({'train_logs':logs,'val_logs':[]}))
+    rows=select_rows(tmp_path,scene_dir,128,123)
+    assert len(rows)==128 and len({r['log_name'] for r in rows})==128

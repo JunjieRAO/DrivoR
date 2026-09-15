@@ -56,3 +56,18 @@ def test_pool_startup_failure_is_reported(tmp_path, monkeypatch):
     summary = json.loads((args.output / "summary.json").read_text())
     assert summary["failed"] == summary["processed"] == 2
     assert all(r["search_status"] == "worker_process_error" for r in summary["scenes"])
+
+
+def test_run_accepts_128_row_train_manifest(tmp_path, monkeypatch):
+    manifest=tmp_path/'manifest.jsonl'
+    manifest.write_text(''.join(json.dumps({'token':str(i),'log_name':f'log_{i}',
+        'declared_split':'train'})+'\n' for i in range(128)))
+    def fail(**kwargs):
+        raise RuntimeError('intentional pool failure after manifest validation')
+    monkeypatch.setattr(runner,'ProcessPoolExecutor',fail)
+    args=SimpleNamespace(command='run',output=tmp_path/'out',manifest=manifest,map_root=None,
+        seed=2,population=4,generations=1,workers=2,worker_threads=1)
+    assert runner.run(args)==2
+    summary=json.loads((args.output/'summary.json').read_text())
+    assert summary['requested']==summary['processed']==128
+    assert all(r['search_status']=='worker_process_error' for r in summary['scenes'])

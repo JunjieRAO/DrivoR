@@ -3,7 +3,7 @@
 set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
-WORK_ROOT="${WORK_ROOT:-$REPO_ROOT/exp/offline_search/nav1_engineering}"
+WORK_ROOT="${WORK_ROOT:-$REPO_ROOT/exp/offline_search/nav1_engineering_128}"
 # Reuse the original manifests/cache; choose a fresh result destination on reruns.
 RESULT_ROOT="${RESULT_ROOT:-$WORK_ROOT}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -23,7 +23,7 @@ case "${1:-help}" in
   prepare)
     "$PYTHON_BIN" -m navsim.offline_search.prepare_nav1 \
       --repo "$REPO_ROOT" --scene-root "$DATA_ROOT/navsim_logs/trainval" \
-      --output "$WORK_ROOT" --count "${SCENE_COUNT:-16}" --seed "${SEARCH_SEED:-20260914}"
+      --output "$WORK_ROOT" --count "${SCENE_COUNT:-128}" --seed "${SEARCH_SEED:-20260914}"
     ;;
   smoke|full)
     mode="$1"
@@ -33,13 +33,13 @@ case "${1:-help}" in
       generations=1
     else
       manifest="$WORK_ROOT/engineering_manifest.jsonl"
-      population=32
-      generations=5
+      population="${SEARCH_POPULATION:-16}"
+      generations="${SEARCH_GENERATIONS:-3}"
     fi
     "$PYTHON_BIN" -m navsim.offline_search.run run \
       --manifest "$manifest" --map-root "$NUPLAN_MAPS_ROOT" \
       --population "$population" --generations "$generations" \
-      --workers "${SEARCH_WORKERS:-1}" --worker-threads "${WORKER_THREADS:-1}" \
+      --workers "${SEARCH_WORKERS:-32}" --worker-threads "${WORKER_THREADS:-1}" \
       --seed "${SEARCH_SEED:-20260914}" --output "$RESULT_ROOT/${mode}_results"
     ;;
   *)

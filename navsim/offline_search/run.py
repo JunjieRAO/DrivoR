@@ -341,8 +341,8 @@ def run(args):
                  "declared_split": "synthetic"} for i in range(getattr(args, "scene_count", 1))]
     else:
         rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
-        if not rows or len(rows) > 16:
-            raise ValueError("Engineering manifest must contain 1..16 rows")
+        if not rows:
+            raise ValueError("Engineering manifest must contain at least one row")
         if len({r['token'] for r in rows}) != len(rows):
             raise ValueError("duplicate manifest tokens")
         if any(r.get("declared_split") != "train" or not isinstance(r.get("token"), str) for r in rows):
@@ -420,12 +420,12 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("manifest", help="Build a log-balanced 1..16 scene train manifest")
+    p = sub.add_parser("manifest", help="Build a log-balanced train manifest")
     p.add_argument("--scene-root", type=Path, required=True)
     p.add_argument("--cache-root", type=Path, required=True)
     p.add_argument("--train-tokens", type=Path, required=True)
     p.add_argument("--exclude-tokens", type=Path, action="append", default=[])
-    p.add_argument("--count", type=int, choices=range(1, 17), default=16)
+    p.add_argument("--count", type=positive_int, default=16)
     p.add_argument("--seed", type=int, default=20260914)
     p.add_argument("--output", type=Path, required=True)
     for name in ["demo", "run"]:
