@@ -22,7 +22,7 @@ import time
 import traceback
 
 import numpy as np
-from .core import Config, Candidate, candidate_id, residual, search, representatives, quality, stable_seed
+from .core import Config, Candidate, candidate_id, residual, search, representatives, quality, stable_seed, improvement_met, improvement_possible
 from .report import write_report
 
 
@@ -171,7 +171,7 @@ class DemoEvaluator:
 def run_scene(evaluator, token, out, config, metadata, demo):
     out.mkdir()
     start = time.perf_counter()
-    if evaluator.gt.score + config.min_gain > 1:
+    if not improvement_possible(evaluator.gt.score, config.min_gain):
         seeds, seed_notes = {}, [{"status": "gt_upper_bound"}]
     elif getattr(evaluator, "unknown", []):
         seeds, seed_notes = {}, [{"status": "structural_cache_error", "reasons": evaluator.unknown}]
@@ -203,7 +203,7 @@ def run_scene(evaluator, token, out, config, metadata, demo):
                 arrays[c.id + "_" + key] = value
     np.savez_compressed(out / "engineering_candidates.npz", **arrays)
     failure_counts = Counter(reason for c in all_c for reason in c.gate["reasons"])
-    search_status = ("gt_upper_bound" if evaluator.gt.score + config.min_gain > 1 else
+    search_status = ("gt_upper_bound" if not improvement_possible(evaluator.gt.score, config.min_gain) else
                      "precheck_blocked" if getattr(evaluator, "unknown", []) else
                      "search_not_started" if not all_c else
                      "nominal_improvement_found" if archive else
@@ -236,7 +236,7 @@ def run_scene(evaluator, token, out, config, metadata, demo):
                "candidate_verifiable_count": sum(c.gate.get('data_verifiable', False) for c in all_c),
                "failure_category_counts": dict(Counter(category for c in all_c for category in {reason.split(':')[0] for reason in c.gate['reasons']})),
                "checked_nominal_pass_count": sum(c.passed for c in all_c),
-               "qualified_count": len({c.id for c in all_c if c.passed and c.score >= evaluator.gt.score + config.min_gain}),
+               "qualified_count": len({c.id for c in all_c if c.passed and improvement_met(c.score, evaluator.gt.score, config.min_gain)}),
                "nominal_improvement_archive": [c.id for c in archive],
                "engineering_diverse_representatives": [c.id for c in selected],
                "failure_counts": dict(failure_counts),

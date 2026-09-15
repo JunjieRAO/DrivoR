@@ -94,7 +94,7 @@ def missing_interval_region(actor, index, speed_bound, dt):
 
 class NominalValidator:
     def __init__(self, config, ego_local, actors, road, gt_path, wheelbase,
-                 unknown_reasons=(), speed_limit_fn=None, terminal_heading_fn=None):
+                 unknown_reasons=(), speed_limit_fn=None, terminal_heading_fn=None, terminal_speed_fn=None):
         self.config = config
         self.ego_local = np.asarray(ego_local)
         self.actors, self.road = actors, road
@@ -103,6 +103,7 @@ class NominalValidator:
         self.unknown = list(unknown_reasons)
         self.speed_limit_fn = speed_limit_fn
         self.terminal_heading_fn = terminal_heading_fn
+        self.terminal_speed_fn = terminal_speed_fn
         self.actor_regions = {}
         self.lifecycle_diagnostics = []
         for actor in actors:
@@ -193,6 +194,10 @@ class NominalValidator:
         path = LineString(states[:, :2])
         if not self.gt_path.buffer(cfg.gt_path_margin).covers(path):
             reasons.append("gt_path_corridor")
+        terminal_speed = self.terminal_speed_fn(states[-1]) if self.terminal_speed_fn else {'enabled': False}
+        if self.terminal_speed_fn and not terminal_speed['passed']:
+            reasons.append(terminal_speed['reason'])
+            events.append({'kind': terminal_speed['reason'], 't': 4.0})
         heading = self.terminal_heading_fn(states[-1]) if self.terminal_heading_fn else {'enabled': False}
         if self.terminal_heading_fn and not heading['passed']:
             reasons.append(heading['reason'])
@@ -200,7 +205,7 @@ class NominalValidator:
         data_ok = not self.unknown and not any("unverifiable" in x for x in reasons)
         return {"checked_nominal_pass": not reasons, "data_verifiable": data_ok,
                 "reasons": sorted(set(reasons)), "events": events,
-                "terminal_heading": heading,
+                "terminal_heading": heading, "terminal_speed": terminal_speed,
                 "clearance_lower_bound": float(min_distance) if np.isfinite(min_distance) else 1e6,
                 "clearance_no_actors": not bool(self.actors),
                 "max_jerk": float(abs(jerk).max()), "max_lateral_acceleration": float(abs(lat).max()),
@@ -252,3 +257,16 @@ def terminal_heading_check(state, gt_states, route, tolerance_deg=1.):
                   reference_heading_rad=ref, endpoint_xy=state[:2].tolist(),
                   candidate_heading_rad=float(state[2]))
     return result
+
+
+def terminal_speed_check(state, gt_speed):
+    speed = float(state[3])
+    if not np.isfinite(gt_speed) or not np.isfinite(speed) or gt_speed < -1e-8:
+        return {'passed': False, 'reason': 'terminal_speed_unverifiable'}
+    reference = max(0., float(gt_speed))
+    delta = min(.5, .1 * reference)
+    limit = reference + delta
+    passed = speed <= limit + 1e-8
+    return {'passed': bool(passed), 'reason': None if passed else 'terminal_speed',
+            'candidate_speed_mps': speed, 'gt_speed_4s_mps': reference,
+            'delta_mps': delta, 'limit_mps': limit, 'numerical_tolerance_mps': 1e-8}

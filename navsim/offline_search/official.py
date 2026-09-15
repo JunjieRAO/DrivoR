@@ -21,7 +21,7 @@ from navsim.planning.simulation.planner.pdm_planner.simulation.batch_lqr import 
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
 from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representation import ego_state_to_state_array
 from .core import Candidate, candidate_id, BOUNDS, basis, residual
-from .geometry import NominalValidator, angle_delta, vertices, terminal_heading_check
+from .geometry import NominalValidator, angle_delta, vertices, terminal_heading_check, terminal_speed_check
 from .adapter_data import cached_actors, frame_clock, speed_limit_at, experiment_speed_limit
 
 
@@ -121,9 +121,11 @@ class OfficialEvaluator:
             self.lanes.append({'id': token, 'layer': layer.name, 'polygon': dm[token],
                                'on_route': token in cache.route_lane_ids,
                                'limit_mps': float(limit) if limit is not None and np.isfinite(limit) and limit > 0 else None})
+        self.gt_terminal_speed = None
         self.validator = NominalValidator(config, self.ego_local, self.actors, self.road,
                 self.gt_path, self.vehicle.wheel_base, self.unknown, self.speed_limit,
-                lambda state: terminal_heading_check(state, self.gt_speed_states, cache.centerline.linestring))
+                lambda state: terminal_heading_check(state, self.gt_speed_states, cache.centerline.linestring),
+                lambda state: terminal_speed_check(state, self.gt_terminal_speed))
         self.evaluations = 0
         self.gt = self.evaluate_poses(self.gt_poses)
         self.gt.island = "GT"
@@ -161,6 +163,8 @@ class OfficialEvaluator:
         commands = np.stack(self.simulator._tracker.commands)[:, 1].copy()
         ref = get_trajectory_as_array(transform_trajectory(trajectory, self.cache.ego_state),
                                      self.sampling, self.cache.ego_state.time_point)
+        if self.gt_terminal_speed is None:
+            self.gt_terminal_speed = float(executed[-1, 3])
         gate = self.validator.check(executed, metrics)
         gate["tracking_rms_xy"] = float(np.sqrt(np.mean(np.sum((ref[:, :2] - executed[:, :2]) ** 2, axis=1))))
         self.evaluations += 1

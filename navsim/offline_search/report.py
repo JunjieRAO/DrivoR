@@ -77,8 +77,9 @@ const D=JSON.parse(document.getElementById('data').textContent), $=x=>document.g
  esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const G=D.candidates.find(c=>c.id===D.gt_id);let C=D.candidates[1]||G, timer=null;
 const minGain=D.metadata.config.min_gain;
-function qualification(c){return c.gate.checked_nominal_pass && c.metrics.score>=G.metrics.score+minGain}
-function statusLabel(c){return !c.gate.checked_nominal_pass?'约束未通过':qualification(c)?'约束通过，PDMS 提升达标':'约束通过，收益未达标'}
+function qualification(c){return c.gate.checked_nominal_pass && (G.metrics.score>=.95?c.metrics.score>G.metrics.score:c.metrics.score>=G.metrics.score+minGain)}
+const retained=new Set(D.metadata.summary?.engineering_diverse_representatives||[]);
+function statusLabel(c){if(retained.has(c.id))return '最终保留轨迹';return !c.gate.checked_nominal_pass?'约束未通过':qualification(c)?'约束通过，PDMS 提升达标':'约束通过，收益未达标'}
 
 $('identity').textContent='Scene: '+D.token+' · 显示 '+D.candidates.length+' 条轨迹 · 搜索状态: '+(D.metadata.summary?.search_status||'unknown')+' · CEM候选: '+(D.metadata.summary?.search_unique_candidates??'unknown');
 $('warning').textContent=D.demo?'合成 DEMO：用于检查搜索、几何验证与报告功能。分数为演示代理值，不是 NAVSIM PDMS，也不是实验收益。':'工程检查结果：评分来自 V1 正式入口。缺帧物体按记录的速度界作条件性范围检查，并非真实运动保证；灰框仅显示已知时刻，未显示不代表不存在。全部候选未完成严格验收，不可直接用作 teacher。';
@@ -129,6 +130,6 @@ $('candidate').onchange=()=>{C=D.candidates.find(c=>c.id===$('candidate').value)
 ['time','all','ghost'].forEach(x=>$(x).oninput=drawMap);
 $('play').onclick=()=>{if(timer){clearInterval(timer);timer=null;$('play').textContent='播放'}else{$('play').textContent='暂停';timer=setInterval(()=>{$('time').value=(+$('time').value+1)%41;drawMap()},100)}};
 $('trace').innerHTML='<table><tr><th>初始化岛</th><th>代</th><th>约束通过 / 候选</th><th>达标</th><th>最佳分数</th><th>累计评估</th></tr>'+D.trace.filter(r=>r.generation!==undefined).map(r=>'<tr><td>'+esc(r.island)+'</td><td>'+r.generation+'</td><td>'+r.feasible+' / '+r.population+'</td><td>'+(r.qualified??'—')+'</td><td>'+(r.best_score===null?'—':(100*r.best_score).toFixed(3))+'</td><td>'+r.evaluations+'</td></tr>').join('')+'</table>';
-$('trace').innerHTML+='<p>达标：约束通过且 PDMS 比 GT 至少提高 '+(100*minGain).toFixed(3)+' 分（0–100）。各行按本代轨迹 ID 去重；全程去重达标：'+(D.metadata.summary?.qualified_count??'未记录')+' 条。达标数不等于归档或聚类代表数。</p>';
+$('trace').innerHTML+='<p>达标：约束通过且 PDMS 比 GT 至少提高 '+(100*minGain).toFixed(3)+' 分（0–100）；GT≥95分时只要求严格高于GT。各行按本代轨迹 ID 去重；全程去重达标：'+(D.metadata.summary?.qualified_count??'未记录')+' 条。达标数不等于归档或聚类代表数。</p>';
 $('meta').textContent=JSON.stringify(D.metadata,null,2);refresh();
 </script></html>'''

@@ -101,7 +101,7 @@ def test_representatives_are_original_members_and_separated():
 
 def test_upper_bound_skip_and_exact_one_target_search():
     gt = fixture_candidate(np.zeros(10))
-    gt.metrics['score'] = .999
+    gt.metrics['score'] = 1.
     assert search(Config(population=4, generations=1), 't', gt, {'B0': np.zeros(10)}, fixture_candidate)[2][0]['status'] == 'gt_upper_bound'
     gt.metrics['score'] = .995
     assert search(Config(population=4, generations=1), 't', gt, {'B0': np.zeros(10)}, fixture_candidate)[0]

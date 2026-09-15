@@ -96,6 +96,14 @@ class Candidate:
                 "export_certified": False, "theta": None if self.theta is None else self.theta.tolist()}
 
 
+def improvement_met(score, gt_score, min_gain=.005):
+    return score > gt_score if gt_score >= .95 else score >= gt_score + min_gain
+
+
+def improvement_possible(gt_score, min_gain=.005):
+    return improvement_met(1., gt_score, min_gain)
+
+
 def quality(c: Candidate):
     return (-c.score, -c.gate.get("clearance_lower_bound", 0.),
             c.gate.get("max_jerk", float("inf")),
@@ -124,7 +132,7 @@ def search(config: Config, token: str, gt: Candidate, seeds: dict[str, np.ndarra
     theta_cache: dict[bytes, Candidate] = {}
     archive: dict[str, Candidate] = {}
     trace = []
-    if gt.score + config.min_gain > 1. + 1e-12:
+    if not improvement_possible(gt.score, config.min_gain):
         return [], [], [{"status": "gt_upper_bound", "score": gt.score}]
     for island, initial in seeds.items():
         mean, std = initial.copy(), STD.copy()
@@ -147,7 +155,7 @@ def search(config: Config, token: str, gt: Candidate, seeds: dict[str, np.ndarra
                     if on_candidate:
                         on_candidate(c)
                 batch.append((theta, c))
-                if c.passed and c.score >= gt.score + config.min_gain:
+                if c.passed and improvement_met(c.score, gt.score, config.min_gain):
                     archive.setdefault(c.id, c)
             feasible = [(t, c) for t, c in batch if c.passed]
             if feasible:
@@ -172,7 +180,7 @@ def search(config: Config, token: str, gt: Candidate, seeds: dict[str, np.ndarra
                 std = np.maximum(FLOOR, .5 * std)
             trace.append({"island": island, "generation": generation,
                           "feasible": len(feasible), "population": len(batch),
-                          "qualified": len({c.id for _, c in batch if c.passed and c.score >= gt.score + config.min_gain}),
+                          "qualified": len({c.id for _, c in batch if c.passed and improvement_met(c.score, gt.score, config.min_gain)}),
                           "verifiable": sum(c.gate.get('data_verifiable', False) for _, c in batch),
                           "best_score": None if best is None else best.score,
                           "sampler_fallback": fallback, "evaluations": len(theta_cache)})
@@ -218,4 +226,6 @@ def representatives(candidates, gt, limit=4):
             chosen.append(c)
             if len(chosen) == limit:
                 break
+    if not chosen and candidates and limit > 0:
+        chosen.append(min(candidates, key=quality))
     return chosen

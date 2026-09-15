@@ -1,3 +1,15 @@
+## Updated final selection policy
+
+Every official candidate must satisfy terminal speed <= original four-second GT
+rollout terminal speed + min(0.5 m/s, 10% of that GT speed); numerical tolerance
+is 1e-8 m/s. Existing path coverage and heading gates remain in place.
+For GT PDMS >= 0.95, any strictly higher PDMS qualifies after constraints pass.
+Below 0.95, the configured minimum gain (default 0.005) still applies.
+If diversity filtering would select no representative, keep the best improving
+archive member. At most four representatives are kept; do not pad with duplicates.
+Reports identify actual selected IDs as final retained trajectories. Training
+export remains disabled. Existing result files require rerunning to apply gates.
+
 ## Scene-level CPU parallelism
 
 `run` and `demo` accept `--workers` (default 1) and `--worker-threads` (default 1).
