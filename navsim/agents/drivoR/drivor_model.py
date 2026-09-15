@@ -195,7 +195,7 @@ class DrivoRModel(nn.Module):
         tr_out = self.scorer_attention(
             embedded_traj,
             scene_features,
-            proposals=proposals,
+            proposals=proposals.detach(),
             patch_features=patch_features,
             cam_K=cam_K,
             world_2_cam=world_2_cam,
