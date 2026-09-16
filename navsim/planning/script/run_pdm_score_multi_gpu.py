@@ -191,6 +191,11 @@ def main(cfg: DictConfig) -> None:
     """
 
     build_logger(cfg)
+    if cfg.visualization.enabled and not cfg.evaluate_all_proposals:
+        raise ValueError("Evaluation visualization requires evaluate_all_proposals=true")
+    if cfg.visualization.num_scenarios < 0:
+        raise ValueError("visualization.num_scenarios must be non-negative")
+
     timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
     dump_root = os.path.join(os.getenv('SUBSCORE_PATH'), "navsim1_pdm_scores", cfg.experiment_name)
     os.makedirs(dump_root, exist_ok=True)
@@ -267,6 +272,30 @@ def main(cfg: DictConfig) -> None:
     pdm_score_df = pd.DataFrame(score_rows)
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
     num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
+    save_path = Path(cfg.output_dir)
+    if cfg.visualization.enabled:
+        from navsim.visualization.pdm_evaluation import (
+            render_failure_visualizations,
+            select_failure_visualizations,
+        )
+
+        visualization_rows = select_failure_visualizations(
+            pdm_score_df,
+            int(cfg.visualization.num_scenarios),
+        )
+        visualization_dir = save_path / f"visualizations_{timestamp}"
+        visualization_index = render_failure_visualizations(
+            visualization_rows,
+            scene_loader_inference,
+            merged_predictions,
+            visualization_dir,
+        )
+        logger.info(
+            "Rendered %d baseline NC/DDC failure visualizations to %s",
+            len(visualization_index),
+            visualization_dir,
+        )
+
     index_columns = ["selected_proposal_idx", "best_proposal_idx"]
     index_columns.extend(f"topk_{int(k)}_proposal_idx" for k in cfg.topk_values)
     non_metric_columns = ["token", "valid", *index_columns]
@@ -280,8 +309,6 @@ def main(cfg: DictConfig) -> None:
             average_row[column] = np.nan
     pdm_score_df.loc[len(pdm_score_df)] = average_row
 
-    save_path = Path(cfg.output_dir)
-    timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
     pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
 
     topk_score_summary = "\n".join(

@@ -184,6 +184,19 @@ independently to preserve NAVSIM's official progress normalization, so this
 mode performs 64 PDM simulations per scene and is substantially slower than
 standard single-trajectory evaluation.
 
+To visualize up to 20 baseline selections whose ground-truth NC or DDC is
+zero, enable visualization together with all-proposal evaluation:
+```bash
+python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py \
+    evaluate_all_proposals=true \
+    visualization.enabled=true \
+    visualization.num_scenarios=20
+```
+Eligible scenes are ordered by ascending baseline ground-truth score. Each BEV
+image highlights the baseline-selected trajectory and the ground-truth oracle
+trajectory. Images and an `index.csv` summary are written to
+`${output_dir}/visualizations_<timestamp>/`.
+
 ```bash
 cd drivoR
 conda activate drivoR
