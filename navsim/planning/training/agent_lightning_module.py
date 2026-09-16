@@ -8,6 +8,7 @@ from typing import Dict, Tuple, Any, List
 from navsim.common.dataclasses import Trajectory
 from navsim.agents.abstract_agent import AbstractAgent
 from navsim.common.dataclasses import Trajectory
+from navsim.planning.training.proposal_selection import select_topk_proposal_indices
 
 def _rowwise_isin(tensor_1: torch.Tensor, target_tensor: torch.Tensor) -> torch.Tensor:
     matches = (tensor_1[:, None] == target_tensor)
@@ -18,7 +19,13 @@ def _rowwise_isin(tensor_1: torch.Tensor, target_tensor: torch.Tensor) -> torch.
 class AgentLightningModule(pl.LightningModule):
     """Pytorch lightning wrapper for learnable agent."""
 
-    def __init__(self, agent: AbstractAgent, for_viz=False, export_all_proposals=False):
+    def __init__(
+        self,
+        agent: AbstractAgent,
+        for_viz=False,
+        export_all_proposals=False,
+        topk_values=(),
+    ):
         """
         Initialise the lightning module wrapper.
         :param agent: agent interface in NAVSIM
@@ -28,6 +35,7 @@ class AgentLightningModule(pl.LightningModule):
         self.checkpoint_file=None
         self.for_viz = for_viz
         self.export_all_proposals = export_all_proposals
+        self.topk_values = tuple(int(k) for k in topk_values)
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -156,6 +164,12 @@ class AgentLightningModule(pl.LightningModule):
                             f"got {tuple(metric_scores.shape)}"
                         )
                 selected_indices = torch.argmax(predicted_pdm_scores, dim=1)
+                topk_selected_indices = select_topk_proposal_indices(
+                    predicted_subscores["no_at_fault_collisions"],
+                    predicted_subscores["drivable_area_compliance"],
+                    predicted_pdm_scores,
+                    self.topk_values,
+                )
             if self.for_viz:
                 all_proposed_trajectories = predictions["proposal_list"]
                 final_trajectories = predictions["proposals"]
@@ -185,6 +199,10 @@ class AgentLightningModule(pl.LightningModule):
                             f"Selected proposal index {selected_idx} is outside [0, {proposal_count})"
                         )
                     result[token]['selected_proposal_idx'] = selected_idx
+                    result[token]['topk_selected_proposal_indices'] = {
+                        k: int(indices[index].item())
+                        for k, indices in topk_selected_indices.items()
+                    }
                     result[token]['predicted_subscores'] = {
                         metric_name: metric_scores[index].detach().cpu().numpy()
                         for metric_name, metric_scores in predicted_subscores.items()

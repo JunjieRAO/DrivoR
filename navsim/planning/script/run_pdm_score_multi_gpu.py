@@ -141,6 +141,27 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
                 score_row.update(
                     {f"best_{key}": value for key, value in asdict(proposal_results[best_idx]).items()}
                 )
+                topk_selected_indices = prediction["topk_selected_proposal_indices"]
+                for configured_k in cfg.topk_values:
+                    k = int(configured_k)
+                    if k not in topk_selected_indices:
+                        raise ValueError(f"Missing selected proposal index for top-k={k}")
+                    topk_idx = int(topk_selected_indices[k])
+                    if not 0 <= topk_idx < proposal_count:
+                        raise ValueError(
+                            f"Top-k={k} proposal index {topk_idx} is outside [0, {proposal_count})"
+                        )
+                    score_row[f"topk_{k}_proposal_idx"] = topk_idx
+                    for metric_name in PREDICTED_SUBSCORE_NAMES:
+                        metric_scores = np.asarray(predicted_subscores[metric_name])
+                        score_row[f"topk_{k}_pred_{metric_name}"] = float(metric_scores[topk_idx])
+                    score_row[f"topk_{k}_pred_pdm_score"] = float(predicted_pdm_scores[topk_idx])
+                    score_row.update(
+                        {
+                            f"topk_{k}_{key}": value
+                            for key, value in asdict(proposal_results[topk_idx]).items()
+                        }
+                    )
             else:
                 pdm_result = pdm_score(
                     metric_cache=metric_cache,
@@ -199,7 +220,11 @@ def main(cfg: DictConfig) -> None:
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
     trainer = pl.Trainer(**cfg.trainer.params)
     predictions = trainer.predict(
-        AgentLightningModule(agent=agent, export_all_proposals=cfg.evaluate_all_proposals),
+        AgentLightningModule(
+            agent=agent,
+            export_all_proposals=cfg.evaluate_all_proposals,
+            topk_values=cfg.topk_values if cfg.evaluate_all_proposals else (),
+        ),
         dataloader,
         return_predictions=True
     )
@@ -243,6 +268,7 @@ def main(cfg: DictConfig) -> None:
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
     num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
     index_columns = ["selected_proposal_idx", "best_proposal_idx"]
+    index_columns.extend(f"topk_{int(k)}_proposal_idx" for k in cfg.topk_values)
     non_metric_columns = ["token", "valid", *index_columns]
     average_row = pdm_score_df.drop(
         columns=[column for column in non_metric_columns if column in pdm_score_df]
@@ -258,6 +284,12 @@ def main(cfg: DictConfig) -> None:
     timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
     pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
 
+    topk_score_summary = "\n".join(
+        f"            NC/DAC top-k={int(k)} average score: "
+        f"{average_row.get(f'topk_{int(k)}_score', 'not computed')}."
+        for k in cfg.topk_values
+    )
+
     logger.info(
         f"""
         Finished running evaluation.
@@ -265,6 +297,7 @@ def main(cfg: DictConfig) -> None:
             Number of failed scenarios: {num_failed_scenarios}.
             Final average score of valid results: {average_row['score']}.
             Best-of-all-proposal average score: {average_row.get('best_score', 'not computed')}.
+{topk_score_summary}
             Results are stored in: {save_path / f"{timestamp}.csv"}.
 
             All scores:
