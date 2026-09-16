@@ -1,0 +1,56 @@
+from typing import Dict
+
+import torch
+
+
+SAFETY_METRIC_NAMES = (
+    "proposal_nc_zero_ratio",
+    "proposal_dac_zero_ratio",
+    "scene_any_nc_zero_ratio",
+    "scene_any_dac_zero_ratio",
+    "proposal_ttc_lt1_ratio",
+    "proposal_safe_ratio",
+    "scene_no_safe_proposal_ratio",
+    "safe_proposal_ep_mean",
+    "avoidable_unsafe_selection_ratio",
+)
+
+
+@torch.no_grad()
+def proposal_safety_statistics(
+    target_scores: torch.Tensor, selected_indices: torch.Tensor
+) -> Dict[str, torch.Tensor]:
+    """Return numerator/denominator pairs for proposal-level safety metrics."""
+    nc, dac, ep, ttc = (target_scores[..., index] for index in range(4))
+    valid = ~torch.isclose(ttc, torch.full_like(ttc, 2.0))
+    valid_scene = valid.any(dim=1)
+    nc_zero = valid & torch.isclose(nc, torch.zeros_like(nc))
+    dac_zero = valid & torch.isclose(dac, torch.zeros_like(dac))
+    safe = (
+        valid
+        & torch.isclose(nc, torch.ones_like(nc))
+        & torch.isclose(dac, torch.ones_like(dac))
+        & torch.isclose(ttc, torch.ones_like(ttc))
+    )
+    scene_has_safe = safe.any(dim=1)
+    selected_safe = safe.gather(1, selected_indices[:, None]).squeeze(1)
+
+    valid_count = valid.sum().to(torch.float64)
+    valid_scene_count = valid_scene.sum().to(torch.float64)
+    safe_count = safe.sum().to(torch.float64)
+    safe_scene_count = scene_has_safe.sum().to(torch.float64)
+
+    def pair(numerator: torch.Tensor, denominator: torch.Tensor) -> torch.Tensor:
+        return torch.stack((numerator.to(torch.float64), denominator.to(torch.float64)))
+
+    return {
+        "proposal_nc_zero_ratio": pair(nc_zero.sum(), valid_count),
+        "proposal_dac_zero_ratio": pair(dac_zero.sum(), valid_count),
+        "scene_any_nc_zero_ratio": pair((nc_zero.any(dim=1) & valid_scene).sum(), valid_scene_count),
+        "scene_any_dac_zero_ratio": pair((dac_zero.any(dim=1) & valid_scene).sum(), valid_scene_count),
+        "proposal_ttc_lt1_ratio": pair((valid & (ttc < 1.0)).sum(), valid_count),
+        "proposal_safe_ratio": pair(safe_count, valid_count),
+        "scene_no_safe_proposal_ratio": pair((valid_scene & ~scene_has_safe).sum(), valid_scene_count),
+        "safe_proposal_ep_mean": pair(ep.masked_select(safe).sum(), safe_count),
+        "avoidable_unsafe_selection_ratio": pair((scene_has_safe & ~selected_safe).sum(), safe_scene_count),
+    }

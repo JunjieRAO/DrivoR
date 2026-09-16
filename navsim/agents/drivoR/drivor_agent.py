@@ -253,7 +253,7 @@ class DrivoRAgent(AbstractAgent):
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return self._drivor_model(features)
 
-    def compute_score(self, targets, proposals, test=True):
+    def compute_score(self, targets, proposals, test=True, return_details=False):
         if self.training:
             metric_cache_paths = self.train_metric_cache_paths
             metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic
@@ -288,7 +288,10 @@ class DrivoRAgent(AbstractAgent):
         if test:
             l2_2s = torch.linalg.norm(proposals[:, 0] - target_trajectory, dim=-1)[:, :4]
 
-            return final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0]
+            result = (final_scores[:, 0].mean(), best_scores.mean(), final_scores, l2_2s.mean(), target_scores[:, 0])
+            if return_details:
+                return (*result, target_scores)
+            return result
         else:
             key_agent_corners = torch.FloatTensor(np.stack([res[1] for res in all_res])).to(proposals.device)
 

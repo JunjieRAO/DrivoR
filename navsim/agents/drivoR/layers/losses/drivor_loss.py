@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import torch.nn as nn
 import os
 from scipy.optimize import linear_sum_assignment
+from navsim.agents.drivoR.collision_loss import differentiable_collision_loss
+from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics
 
 @torch.no_grad()
 def _get_ce_cost(gt_valid: torch.Tensor, pred_logits: torch.Tensor) -> torch.Tensor:
@@ -133,6 +135,9 @@ class DrivoRLoss(torch.nn.Module):
                         agent_class_weight: float = 1.0,
                         agent_box_weight: float = 1.0,
                         bev_semantic_weight: float = 1.0,
+                        collision_weight: float = 0.5,
+                        collision_margin: float = 0.7,
+                        collision_filter_radius: float = 10.0,
                         **kwargs):
         super().__init__()
 
@@ -147,6 +152,9 @@ class DrivoRLoss(torch.nn.Module):
         self.agent_class_weight = agent_class_weight
         self.agent_box_weight = agent_box_weight
         self.bev_semantic_weight = bev_semantic_weight
+        self.collision_weight = collision_weight
+        self.collision_margin = collision_margin
+        self.collision_filter_radius = collision_filter_radius
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,
@@ -247,6 +255,8 @@ class DrivoRLoss(torch.nn.Module):
 
         final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas = scoring_function(
             targets, proposals, test=False)
+        selected_indices = pred["pdm_score"].detach().argmax(dim=1)
+        safety_statistics = proposal_safety_statistics(target_scores, selected_indices)
 
         ########
         if "trajectory_long" in targets.keys():
@@ -304,6 +314,14 @@ class DrivoRLoss(torch.nn.Module):
         else:
             bev_semantic_loss = 0
 
+        collision_loss = differentiable_collision_loss(
+            proposals,
+            targets["future_agent_states"],
+            targets["future_agent_valid"],
+            margin=self.collision_margin,
+            filter_radius=self.collision_filter_radius,
+        )
+
         loss = (
                 self.trajectory_weight * trajectory_loss
                 # + self.sub_score_weight * sub_score_loss
@@ -314,6 +332,7 @@ class DrivoRLoss(torch.nn.Module):
                 + self.agent_class_weight * agent_class_loss
                 + self.agent_box_weight * agent_box_loss
                 + self.bev_semantic_weight * bev_semantic_loss
+                + self.collision_weight * collision_loss
 
         )
 
@@ -347,5 +366,7 @@ class DrivoRLoss(torch.nn.Module):
             "score": score,
             "best_score": best_score
         }
+        loss_dict["collision_loss"] = collision_loss
+        loss_dict["_proposal_safety_statistics"] = safety_statistics
 
         return loss_dict

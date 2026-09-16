@@ -18,6 +18,10 @@ from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType
 from navsim.common.dataclasses import AgentInput, Scene, Annotations
 from navsim.common.enums import BoundingBoxIndex, LidarIndex
 from navsim.planning.scenario_builder.navsim_scenario_utils import tracked_object_types
+from navsim.planning.simulation.planner.pdm_planner.utils.pdm_geometry_utils import (
+    convert_absolute_to_relative_se2_array,
+    normalize_angle,
+)
 from navsim.planning.training.abstract_feature_target_builder import (
     AbstractFeatureBuilder,
     AbstractTargetBuilder,
@@ -202,7 +206,7 @@ class DrivoRTargetBuilder(AbstractTargetBuilder):
 
     def get_unique_name(self) -> str:
         """Inherited, see superclass."""
-        return "drivor_target"
+        return "drivor_target_collision_v1"
 
     def compute_targets(self, scene: Scene) -> Dict[str, torch.Tensor]:
         """Inherited, see superclass."""
@@ -212,6 +216,13 @@ class DrivoRTargetBuilder(AbstractTargetBuilder):
                 num_trajectory_frames=self._config.trajectory_sampling.num_poses
             ).poses
         )
+        future_agent_states, future_agent_valid = self._compute_future_agent_targets(scene)
+        targets = {
+            "trajectory": trajectory,
+            "future_agent_states": future_agent_states,
+            "future_agent_valid": future_agent_valid,
+            "token": scene.scene_metadata.initial_token,
+        }
         # frame_idx = scene.scene_metadata.num_history_frames - 1
         # annotations = scene.frames[frame_idx].annotations
         # ego_pose = StateSE2(*scene.frames[frame_idx].ego_status.ego_pose)
@@ -236,30 +247,58 @@ class DrivoRTargetBuilder(AbstractTargetBuilder):
                     traj_.append(cs(x_new))
                 trajectory_long = np.stack(traj_, axis=1)
 
-                trajectory_long = torch.tensor(trajectory_long)
-                return {
-                    "trajectory": trajectory,
-                    "trajectory_long": trajectory_long,
-                    "token":scene.scene_metadata.initial_token
-                }
+                targets["trajectory_long"] = torch.tensor(trajectory_long)
             except:
-                return {
-                    "trajectory": trajectory,
-                    "trajectory_long": trajectory,
-                    # "agent_states": agent_states,
-                    # "agent_labels": agent_labels,
-                    # "bev_semantic_map": bev_semantic_map,
-                    "token":scene.scene_metadata.initial_token
-                }
-        else:
+                targets["trajectory_long"] = trajectory
 
-            return {
-                "trajectory": trajectory,
-                # "agent_states": agent_states,
-                # "agent_labels": agent_labels,
-                # "bev_semantic_map": bev_semantic_map,
-                "token":scene.scene_metadata.initial_token
-            }
+        return targets
+
+    def _compute_future_agent_targets(self, scene: Scene) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Build future dynamic-agent boxes in the current rear-axle coordinate frame."""
+        num_poses = self._config.trajectory_sampling.num_poses
+        max_agents = self._config.collision_max_agents
+        states = np.zeros((num_poses, max_agents, BoundingBox2DIndex.size()), dtype=np.float32)
+        valid = np.zeros((num_poses, max_agents), dtype=bool)
+        current_frame_idx = scene.scene_metadata.num_history_frames - 1
+        current_pose = StateSE2(*scene.frames[current_frame_idx].ego_status.ego_pose)
+        valid_classes = {"vehicle", "pedestrian", "bicycle"}
+
+        for time_idx in range(num_poses):
+            frame = scene.frames[current_frame_idx + 1 + time_idx]
+            frame_pose = StateSE2(*frame.ego_status.ego_pose)
+            frame_states = []
+
+            for box, name in zip(frame.annotations.boxes, frame.annotations.names):
+                if name not in valid_classes:
+                    continue
+
+                local_x, local_y, local_heading = box[0], box[1], box[6]
+                cos_heading = np.cos(frame_pose.heading)
+                sin_heading = np.sin(frame_pose.heading)
+                global_state = np.array(
+                    [[
+                        frame_pose.x + cos_heading * local_x - sin_heading * local_y,
+                        frame_pose.y + sin_heading * local_x + cos_heading * local_y,
+                        normalize_angle(frame_pose.heading + local_heading),
+                    ]],
+                    dtype=np.float64,
+                )
+                relative_state = convert_absolute_to_relative_se2_array(current_pose, global_state)[0]
+                frame_states.append(
+                    np.array(
+                        [relative_state[0], relative_state[1], relative_state[2], box[3], box[4]],
+                        dtype=np.float32,
+                    )
+                )
+
+            if frame_states:
+                frame_states_array = np.stack(frame_states)
+                distances = np.linalg.norm(frame_states_array[:, :2], axis=-1)
+                frame_states_array = frame_states_array[np.argsort(distances)[:max_agents]]
+                states[time_idx, :len(frame_states_array)] = frame_states_array
+                valid[time_idx, :len(frame_states_array)] = True
+
+        return torch.from_numpy(states), torch.from_numpy(valid)
 
     def _compute_agent_targets(self, annotations: Annotations) -> Tuple[torch.Tensor, torch.Tensor]:
         """

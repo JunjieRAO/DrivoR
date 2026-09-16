@@ -3,10 +3,15 @@ from time import sleep
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 from torch import Tensor
 from typing import Dict, Tuple, Any, List
 from navsim.common.dataclasses import Trajectory
 from navsim.agents.abstract_agent import AbstractAgent
+from navsim.agents.drivoR.proposal_metrics import (
+    SAFETY_METRIC_NAMES,
+    proposal_safety_statistics,
+)
 from navsim.common.dataclasses import Trajectory
 
 def _rowwise_isin(tensor_1: torch.Tensor, target_tensor: torch.Tensor) -> torch.Tensor:
@@ -28,6 +33,57 @@ class AgentLightningModule(pl.LightningModule):
         self.checkpoint_file=None
         self.for_viz = for_viz
         self.export_all_proposals = export_all_proposals
+        self._safety_metric_states = {
+            stage: {
+                metric_name: torch.zeros(2, dtype=torch.float64)
+                for metric_name in SAFETY_METRIC_NAMES
+            }
+            for stage in ("train", "val")
+        }
+
+    def _update_safety_metrics(
+        self,
+        stage: str,
+        statistics: Dict[str, torch.Tensor],
+        log_step: bool = False,
+    ) -> None:
+        for metric_name, counts in statistics.items():
+            state = self._safety_metric_states[stage][metric_name]
+            if state.device != counts.device:
+                state = state.to(counts.device)
+                self._safety_metric_states[stage][metric_name] = state
+            state.add_(counts.to(device=state.device, dtype=state.dtype))
+            if log_step:
+                value = torch.where(counts[1] > 0, counts[0] / counts[1], counts.new_zeros(()))
+                self.log(
+                    f"{stage}/{metric_name}_step",
+                    value.float(),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=False,
+                    sync_dist=True,
+                )
+
+    def _log_safety_epoch(self, stage: str) -> None:
+        for metric_name in SAFETY_METRIC_NAMES:
+            state = self._safety_metric_states[stage][metric_name]
+            global_state = state.clone()
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(global_state, op=dist.ReduceOp.SUM)
+            value = torch.where(
+                global_state[1] > 0,
+                global_state[0] / global_state[1],
+                global_state.new_zeros(()),
+            )
+            self.log(
+                f"{stage}/{metric_name}",
+                value.float(),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                sync_dist=False,
+            )
+            state.zero_()
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -42,7 +98,12 @@ class AgentLightningModule(pl.LightningModule):
         loss_dict = self.agent.compute_loss(features, targets, prediction)
 
         if type(loss_dict) is dict:
+            safety_statistics = loss_dict.get("_proposal_safety_statistics")
+            if safety_statistics is not None:
+                self._update_safety_metrics(logging_prefix, safety_statistics, log_step=logging_prefix == "train")
             for key,value in loss_dict.items():
+                if key.startswith("_"):
+                    continue
                 self.log(f"{logging_prefix}/"+key, value, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
             return loss_dict["loss"]
         else:
@@ -71,7 +132,9 @@ class AgentLightningModule(pl.LightningModule):
             all_chosen_trajectories = predictions["trajectory"][:,None]
             all_proposed_trajectories = predictions["proposals"]
             final_score, fake_best_score, proposal_scores, l2, trajectoy_scores = self.agent.compute_score(targets, all_chosen_trajectories)
-            _, best_score, all_proposal_scores, _, _ = self.agent.compute_score(targets, all_proposed_trajectories)
+            _, best_score, all_proposal_scores, _, _, all_target_scores = self.agent.compute_score(
+                targets, all_proposed_trajectories, return_details=True
+            )
             mean_score=proposal_scores.mean()
 
             logging_prefix="val"
@@ -82,6 +145,10 @@ class AgentLightningModule(pl.LightningModule):
                 self.log(f"{logging_prefix}/score_error", score_error, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
                 
                 best_pred_score_index = torch.argmax(pdm_score, dim=1)
+                self._update_safety_metrics(
+                    "val",
+                    proposal_safety_statistics(all_target_scores, best_pred_score_index),
+                )
                 best_real_score_index = torch.argmax(all_proposal_scores, dim=1)
                 score_hit_rate = torch.mean(best_pred_score_index == best_real_score_index, dtype=torch.float32)
 
@@ -113,6 +180,14 @@ class AgentLightningModule(pl.LightningModule):
             return final_score
         else:
             return self._step(batch, "val")
+
+    def on_train_epoch_end(self) -> None:
+        if 'drivor' in self.agent.name() or "DrivoR" in self.agent.name():
+            self._log_safety_epoch("train")
+
+    def on_validation_epoch_end(self) -> None:
+        if 'drivor' in self.agent.name() or "DrivoR" in self.agent.name():
+            self._log_safety_epoch("val")
 
     def configure_optimizers(self):
         """Inherited, see superclass."""

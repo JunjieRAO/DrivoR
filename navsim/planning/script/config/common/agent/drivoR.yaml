@@ -10,6 +10,7 @@ config:
 
   proposal_num: 64 # number of proposals (trajectories)
   num_poses: 8 # size if the trajectories
+  collision_max_agents: 64
 
   num_scene_tokens: 16 
   one_token_per_traj: true
@@ -113,6 +114,9 @@ loss:
   agent_box_weight: 0.1
   bev_semantic_weight: 1.0
   div_weight: 0.0
+  collision_weight: 0.5
+  collision_margin: 0.7
+  collision_filter_radius: 10.0
 
 
 checkpoint_path: ''
