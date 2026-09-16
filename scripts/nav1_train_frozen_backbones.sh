@@ -95,7 +95,7 @@ if [[ -n "$LIDAR_BACKBONE_CHECKPOINT" ]]; then
   FREEZE_LIDAR=true
 fi
 
-python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training_full.py" \
+python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training.py" \
   agent=drivoR \
   experiment_name="$EXPERIMENT_NAME" \
   train_test_split=navtrain \
