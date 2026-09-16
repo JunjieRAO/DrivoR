@@ -291,7 +291,7 @@ def main(cfg: DictConfig) -> None:
             visualization_dir,
         )
         logger.info(
-            "Rendered %d baseline NC/DDC failure visualizations to %s",
+            "Rendered %d baseline NC/DAC failure visualizations to %s",
             len(visualization_index),
             visualization_dir,
         )

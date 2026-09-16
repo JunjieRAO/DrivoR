@@ -17,8 +17,8 @@ class TestPdmEvaluationVisualization(unittest.TestCase):
         self.results = pd.DataFrame(
             [
                 self._row("nc", True, 0.0, 1.0, 0.3),
-                self._row("ddc-b", True, 1.0, 0.0, 0.2),
-                self._row("ddc-a", True, 1.0, 0.0, 0.2),
+                self._row("dac-b", True, 1.0, 0.0, 0.2),
+                self._row("dac-a", True, 1.0, 0.0, 0.2),
                 self._row("both", True, 0.0, 0.0, 0.1),
                 self._row("passing", True, 1.0, 1.0, 0.0),
                 self._row("invalid", False, 0.0, 0.0, 0.0),
@@ -28,8 +28,8 @@ class TestPdmEvaluationVisualization(unittest.TestCase):
     def test_filters_failures_and_sorts_by_score_then_token(self) -> None:
         selected = select_failure_visualizations(self.results, 3)
 
-        self.assertEqual(selected["token"].tolist(), ["both", "ddc-a", "ddc-b"])
-        self.assertEqual(selected["failure_reason"].tolist(), ["nc0_ddc0", "ddc0", "ddc0"])
+        self.assertEqual(selected["token"].tolist(), ["both", "dac-a", "dac-b"])
+        self.assertEqual(selected["failure_reason"].tolist(), ["nc0_dac0", "dac0", "dac0"])
 
     def test_respects_zero_and_oversized_limits(self) -> None:
         self.assertTrue(select_failure_visualizations(self.results, 0).empty)
@@ -74,17 +74,17 @@ class TestPdmEvaluationVisualization(unittest.TestCase):
             self.assertTrue((output_dir / index.iloc[0]["image"]).is_file())
 
     @staticmethod
-    def _row(token: str, valid: bool, nc: float, ddc: float, score: float) -> dict:
+    def _row(token: str, valid: bool, nc: float, dac: float, score: float) -> dict:
         return {
             "token": token,
             "valid": valid,
             "no_at_fault_collisions": nc,
-            "driving_direction_compliance": ddc,
+            "drivable_area_compliance": dac,
             "score": score,
             "selected_proposal_idx": 0,
             "best_proposal_idx": 1,
             "best_no_at_fault_collisions": 1.0,
-            "best_driving_direction_compliance": 1.0,
+            "best_drivable_area_compliance": 1.0,
             "best_score": 0.9,
         }
 

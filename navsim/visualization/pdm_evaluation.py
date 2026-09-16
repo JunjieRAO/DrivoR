@@ -42,17 +42,17 @@ VISUALIZATION_INDEX_COLUMNS = (
     "selected_proposal_idx",
     "best_proposal_idx",
     "no_at_fault_collisions",
-    "driving_direction_compliance",
+    "drivable_area_compliance",
     "score",
     "best_no_at_fault_collisions",
-    "best_driving_direction_compliance",
+    "best_drivable_area_compliance",
     "best_score",
     "image",
 )
 
 
 def select_failure_visualizations(results: pd.DataFrame, num_scenarios: int) -> pd.DataFrame:
-    """Select baseline NC/DDC failures by ascending ground-truth score."""
+    """Select baseline NC/DAC failures by ascending ground-truth score."""
     if num_scenarios < 0:
         raise ValueError(f"Expected a non-negative visualization count, got {num_scenarios}")
 
@@ -60,7 +60,7 @@ def select_failure_visualizations(results: pd.DataFrame, num_scenarios: int) -> 
         "token",
         "valid",
         "no_at_fault_collisions",
-        "driving_direction_compliance",
+        "drivable_area_compliance",
         "score",
     }
     missing_columns = required_columns.difference(results.columns)
@@ -71,7 +71,7 @@ def select_failure_visualizations(results: pd.DataFrame, num_scenarios: int) -> 
         results["valid"].astype(bool)
         & (
             results["no_at_fault_collisions"].eq(0)
-            | results["driving_direction_compliance"].eq(0)
+            | results["drivable_area_compliance"].eq(0)
         )
     ].copy()
     eligible["failure_reason"] = eligible.apply(_failure_reason, axis=1)
@@ -128,10 +128,10 @@ def render_failure_visualizations(
                     "selected_proposal_idx": selected_idx,
                     "best_proposal_idx": best_idx,
                     "no_at_fault_collisions": row["no_at_fault_collisions"],
-                    "driving_direction_compliance": row["driving_direction_compliance"],
+                    "drivable_area_compliance": row["drivable_area_compliance"],
                     "score": row["score"],
                     "best_no_at_fault_collisions": row["best_no_at_fault_collisions"],
-                    "best_driving_direction_compliance": row["best_driving_direction_compliance"],
+                    "best_drivable_area_compliance": row["best_drivable_area_compliance"],
                     "best_score": row["best_score"],
                     "image": image_name,
                 }
@@ -149,7 +149,7 @@ def render_failure_visualizations(
 
 def _failure_reason(row: pd.Series) -> str:
     nc_failed = row["no_at_fault_collisions"] == 0
-    ddc_failed = row["driving_direction_compliance"] == 0
-    if nc_failed and ddc_failed:
-        return "nc0_ddc0"
-    return "nc0" if nc_failed else "ddc0"
+    dac_failed = row["drivable_area_compliance"] == 0
+    if nc_failed and dac_failed:
+        return "nc0_dac0"
+    return "nc0" if nc_failed else "dac0"

@@ -184,7 +184,7 @@ independently to preserve NAVSIM's official progress normalization, so this
 mode performs 64 PDM simulations per scene and is substantially slower than
 standard single-trajectory evaluation.
 
-To visualize up to 20 baseline selections whose ground-truth NC or DDC is
+To visualize up to 20 baseline selections whose ground-truth NC or DAC is
 zero, enable visualization together with all-proposal evaluation:
 ```bash
 python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py \
