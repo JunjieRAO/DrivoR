@@ -1,6 +1,6 @@
 import torch
 
-from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics
+from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics, wta_gt_statistics
 
 
 def _scores() -> torch.Tensor:
@@ -58,3 +58,26 @@ def test_statistics_zero_denominators_are_explicit() -> None:
 
     for counts in statistics.values():
         assert counts[1] == 0
+
+
+def test_wta_gt_statistics_track_frequency_and_loss_share() -> None:
+    target = torch.zeros((2, 1, 3))
+    proposals = torch.tensor(
+        [
+            [[[3.0, 0.0, 0.0]], [[4.0, 0.0, 0.0]]],
+            [[[1.0, 0.0, 0.0]], [[2.0, 0.0, 0.0]]],
+        ]
+    ).reshape(2, 2, 1, 3)
+    proposal_pdms = torch.tensor([[0.9, 0.1], [0.4, 0.2]])
+    gt_pdms = torch.tensor([0.8, 0.5])
+
+    statistics = wta_gt_statistics(proposals, target, proposal_pdms, gt_pdms)
+
+    assert torch.allclose(
+        statistics["wta_pdms_better_than_gt_ratio"],
+        torch.tensor([1.0, 2.0], dtype=torch.float64),
+    )
+    assert torch.allclose(
+        statistics["wta_better_than_gt_min_loss_ratio"],
+        torch.tensor([3.0, 4.0], dtype=torch.float64),
+    )

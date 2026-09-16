@@ -11,6 +11,7 @@ from navsim.agents.abstract_agent import AbstractAgent
 from navsim.agents.drivoR.proposal_metrics import (
     SAFETY_METRIC_NAMES,
     proposal_safety_statistics,
+    wta_gt_statistics,
 )
 from navsim.common.dataclasses import Trajectory
 
@@ -131,10 +132,15 @@ class AgentLightningModule(pl.LightningModule):
             predictions = self.agent.forward(features)
             all_chosen_trajectories = predictions["trajectory"][:,None]
             all_proposed_trajectories = predictions["proposals"]
+            proposals_with_gt = torch.cat((all_proposed_trajectories, targets["trajectory"][:, None]), dim=1)
             final_score, fake_best_score, proposal_scores, l2, trajectoy_scores = self.agent.compute_score(targets, all_chosen_trajectories)
-            _, best_score, all_proposal_scores, _, _, all_target_scores = self.agent.compute_score(
-                targets, all_proposed_trajectories, return_details=True
+            _, _, scores_with_gt, _, _, target_scores_with_gt = self.agent.compute_score(
+                targets, proposals_with_gt, return_details=True
             )
+            all_proposal_scores = scores_with_gt[:, :-1]
+            all_target_scores = target_scores_with_gt[:, :-1]
+            gt_scores = scores_with_gt[:, -1]
+            best_score = all_proposal_scores.amax(dim=-1).mean()
             mean_score=proposal_scores.mean()
 
             logging_prefix="val"
@@ -145,10 +151,16 @@ class AgentLightningModule(pl.LightningModule):
                 self.log(f"{logging_prefix}/score_error", score_error, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
                 
                 best_pred_score_index = torch.argmax(pdm_score, dim=1)
-                self._update_safety_metrics(
-                    "val",
-                    proposal_safety_statistics(all_target_scores, best_pred_score_index),
+                safety_statistics = proposal_safety_statistics(all_target_scores, best_pred_score_index)
+                safety_statistics.update(
+                    wta_gt_statistics(
+                        all_proposed_trajectories,
+                        targets["trajectory"],
+                        all_proposal_scores,
+                        gt_scores,
+                    )
                 )
+                self._update_safety_metrics("val", safety_statistics)
                 best_real_score_index = torch.argmax(all_proposal_scores, dim=1)
                 score_hit_rate = torch.mean(best_pred_score_index == best_real_score_index, dtype=torch.float32)
 

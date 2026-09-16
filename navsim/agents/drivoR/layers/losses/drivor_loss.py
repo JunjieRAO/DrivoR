@@ -6,7 +6,7 @@ import torch.nn as nn
 import os
 from scipy.optimize import linear_sum_assignment
 from navsim.agents.drivoR.collision_loss import differentiable_collision_loss
-from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics
+from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics, wta_gt_statistics
 
 @torch.no_grad()
 def _get_ce_cost(gt_valid: torch.Tensor, pred_logits: torch.Tensor) -> torch.Tensor:
@@ -253,10 +253,18 @@ class DrivoRLoss(torch.nn.Module):
         proposal_list = pred["proposal_list"]
         target_trajectory = targets["trajectory"]
 
-        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas = scoring_function(
-            targets, proposals, test=False)
+        scored_trajectories = torch.cat((proposals, target_trajectory[:, None]), dim=1)
+        all_final_scores, _, all_target_scores, gt_states, gt_valid, gt_ego_areas = scoring_function(
+            targets, scored_trajectories, test=False)
+        final_scores = all_final_scores[:, :-1]
+        target_scores = all_target_scores[:, :-1]
+        gt_scores = all_final_scores[:, -1]
+        best_scores = final_scores.amax(dim=-1)
         selected_indices = pred["pdm_score"].detach().argmax(dim=1)
         safety_statistics = proposal_safety_statistics(target_scores, selected_indices)
+        safety_statistics.update(
+            wta_gt_statistics(proposals, target_trajectory, final_scores, gt_scores)
+        )
 
         ########
         if "trajectory_long" in targets.keys():

@@ -13,6 +13,8 @@ SAFETY_METRIC_NAMES = (
     "scene_no_safe_proposal_ratio",
     "safe_proposal_ep_mean",
     "avoidable_unsafe_selection_ratio",
+    "wta_pdms_better_than_gt_ratio",
+    "wta_better_than_gt_min_loss_ratio",
 )
 
 
@@ -53,4 +55,33 @@ def proposal_safety_statistics(
         "scene_no_safe_proposal_ratio": pair((valid_scene & ~scene_has_safe).sum(), valid_scene_count),
         "safe_proposal_ep_mean": pair(ep.masked_select(safe).sum(), safe_count),
         "avoidable_unsafe_selection_ratio": pair((scene_has_safe & ~selected_safe).sum(), safe_scene_count),
+    }
+
+
+@torch.no_grad()
+def wta_gt_statistics(
+    proposals: torch.Tensor,
+    target_trajectory: torch.Tensor,
+    proposal_pdms: torch.Tensor,
+    gt_pdms: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Measure how often the imitation WTA beats GT and its share of WTA loss."""
+    per_proposal_loss = torch.linalg.vector_norm(
+        proposals - target_trajectory[:, None], ord=1, dim=-1
+    ).mean(dim=-1)
+    wta_loss, wta_indices = per_proposal_loss.min(dim=1)
+    wta_pdms = proposal_pdms.gather(1, wta_indices[:, None]).squeeze(1)
+    better_than_gt = wta_pdms > gt_pdms
+    scene_count = torch.tensor(float(proposals.shape[0]), device=proposals.device, dtype=torch.float64)
+
+    return {
+        "wta_pdms_better_than_gt_ratio": torch.stack(
+            (better_than_gt.sum().to(torch.float64), scene_count)
+        ),
+        "wta_better_than_gt_min_loss_ratio": torch.stack(
+            (
+                wta_loss.masked_select(better_than_gt).sum().to(torch.float64),
+                wta_loss.sum().to(torch.float64),
+            )
+        ),
     }
