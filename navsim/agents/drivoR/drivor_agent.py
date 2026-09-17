@@ -86,6 +86,7 @@ class DrivoRAgent(AbstractAgent):
         self.batch_size = batch_size
         self.num_gpus = num_gpus
         self.train_metric_cache_path = train_metric_cache_path
+        self.current_epoch_for_loss = 0
 
 
         cache_data=False
@@ -307,7 +308,13 @@ class DrivoRAgent(AbstractAgent):
             targets: Dict[str, torch.Tensor],
             pred: Dict[str, torch.Tensor],
     ) -> Dict:
-        return self.loss(targets, pred, self._config, self.compute_score)
+        return self.loss(
+            targets,
+            pred,
+            self._config,
+            self.compute_score,
+            current_epoch=self.current_epoch_for_loss,
+        )
 
     def get_optimizers(self):
 

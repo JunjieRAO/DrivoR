@@ -6,7 +6,12 @@ import torch.nn as nn
 import os
 from scipy.optimize import linear_sum_assignment
 from navsim.agents.drivoR.collision_loss import differentiable_collision_loss
-from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics, wta_gt_statistics
+from navsim.agents.drivoR.proposal_metrics import (
+    proposal_safety_statistics,
+    wta_gt_statistics,
+    wta_imitation_weights,
+    wta_loss_schedule,
+)
 
 @torch.no_grad()
 def _get_ce_cost(gt_valid: torch.Tensor, pred_logits: torch.Tensor) -> torch.Tensor:
@@ -138,6 +143,9 @@ class DrivoRLoss(torch.nn.Module):
                         collision_weight: float = 0.5,
                         collision_margin: float = 0.7,
                         collision_filter_radius: float = 10.0,
+                        wta_discount_start_epoch: int = 5,
+                        wta_discount_end_epoch: int = 8,
+                        wta_min_weight: float = 0.2,
                         **kwargs):
         super().__init__()
 
@@ -155,6 +163,9 @@ class DrivoRLoss(torch.nn.Module):
         self.collision_weight = collision_weight
         self.collision_margin = collision_margin
         self.collision_filter_radius = collision_filter_radius
+        self.wta_discount_start_epoch = wta_discount_start_epoch
+        self.wta_discount_end_epoch = wta_discount_end_epoch
+        self.wta_min_weight = wta_min_weight
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,
@@ -247,7 +258,14 @@ class DrivoRLoss(torch.nn.Module):
 
         return inter_loss
 
-    def forward(self,targets: Dict[str, torch.Tensor], pred: Dict[str, torch.Tensor], config  , scoring_function=None):
+    def forward(
+        self,
+        targets: Dict[str, torch.Tensor],
+        pred: Dict[str, torch.Tensor],
+        config,
+        scoring_function=None,
+        current_epoch: int = 0,
+    ):
 
         proposals = pred["proposals"]
         proposal_list = pred["proposal_list"]
@@ -278,16 +296,43 @@ class DrivoRLoss(torch.nn.Module):
         trajectory_loss = 0
         min_loss_list = []
         inter_loss_list = []
-        for proposals_i in proposal_list:
+        scheduled_weight = wta_loss_schedule(
+            current_epoch,
+            start_epoch=self.wta_discount_start_epoch,
+            end_epoch=self.wta_discount_end_epoch,
+            minimum_weight=self.wta_min_weight,
+        )
+        discounted_masks = []
+        for refinement_idx, proposals_i in enumerate(proposal_list):
+            short_distances = torch.linalg.vector_norm(
+                proposals_i - target_trajectory[:, None], ord=1, dim=-1
+            ).mean(dim=-1)
+            short_loss, short_indices = short_distances.min(dim=1)
 
-            min_loss = torch.linalg.norm(proposals_i - target_trajectory[:, None], dim=-1, ord=1).mean(-1).amin(
-                1).mean()
-
-            #########
             if target_trajectory_long is not None:
-                min_loss = min_loss + torch.linalg.norm(proposals_i - target_trajectory_long[:, None], dim=-1, ord=1).mean(-1).amin(
-                    1).mean()
-            #########
+                long_distances = torch.linalg.vector_norm(
+                    proposals_i - target_trajectory_long[:, None], ord=1, dim=-1
+                ).mean(dim=-1)
+                long_loss, long_indices = long_distances.min(dim=1)
+            else:
+                long_loss = torch.zeros_like(short_loss)
+                long_indices = short_indices
+
+            if refinement_idx == len(proposal_list) - 1:
+                short_weights, short_discounted = wta_imitation_weights(
+                    short_indices, final_scores, target_scores, gt_scores, scheduled_weight
+                )
+                if target_trajectory_long is not None:
+                    long_weights, long_discounted = wta_imitation_weights(
+                        long_indices, final_scores, target_scores, gt_scores, scheduled_weight
+                    )
+                    discounted_masks = [short_discounted, long_discounted]
+                else:
+                    long_weights = torch.ones_like(short_weights)
+                    discounted_masks = [short_discounted]
+                min_loss = (short_loss * short_weights + long_loss * long_weights).mean()
+            else:
+                min_loss = (short_loss + long_loss).mean()
 
             inter_loss = self.diversity_loss(proposals_i)
 
@@ -297,6 +342,7 @@ class DrivoRLoss(torch.nn.Module):
             inter_loss_list.append(inter_loss)
         min_loss0 = min_loss_list[0]
         inter_loss0 = inter_loss_list[0]
+        discounted_ratio = torch.stack(discounted_masks).float().mean()
         # min_loss1 = min_loss_list[1]
         # inter_loss1 = inter_loss_list[1]
         l2_distance =  -((proposals.detach() - target_trajectory[:, None]) ** 2) / 0.5 # b,64,8,8
@@ -375,6 +421,8 @@ class DrivoRLoss(torch.nn.Module):
             "best_score": best_score
         }
         loss_dict["collision_loss"] = collision_loss
+        loss_dict["wta_loss_weight"] = proposals.new_tensor(scheduled_weight)
+        loss_dict["wta_discounted_ratio"] = discounted_ratio
         loss_dict["_proposal_safety_statistics"] = safety_statistics
 
         return loss_dict

@@ -95,6 +95,8 @@ class AgentLightningModule(pl.LightningModule):
         """
         features, targets = batch
 
+        if logging_prefix == "train" and hasattr(self.agent, "current_epoch_for_loss"):
+            self.agent.current_epoch_for_loss = self.current_epoch
         prediction = self.agent.forward(features)
         loss_dict = self.agent.compute_loss(features, targets, prediction)
 

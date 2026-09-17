@@ -117,6 +117,9 @@ loss:
   collision_weight: 0.5
   collision_margin: 0.7
   collision_filter_radius: 10.0
+  wta_discount_start_epoch: 5
+  wta_discount_end_epoch: 8
+  wta_min_weight: 0.2
 
 
 checkpoint_path: ''

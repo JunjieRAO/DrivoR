@@ -1,6 +1,11 @@
 import torch
 
-from navsim.agents.drivoR.proposal_metrics import proposal_safety_statistics, wta_gt_statistics
+from navsim.agents.drivoR.proposal_metrics import (
+    proposal_safety_statistics,
+    wta_gt_statistics,
+    wta_imitation_weights,
+    wta_loss_schedule,
+)
 
 
 def _scores() -> torch.Tensor:
@@ -81,3 +86,24 @@ def test_wta_gt_statistics_track_frequency_and_loss_share() -> None:
         statistics["wta_better_than_gt_min_loss_ratio"],
         torch.tensor([3.0, 4.0], dtype=torch.float64),
     )
+
+
+def test_wta_loss_schedule() -> None:
+    expected = {4: 1.0, 5: 0.8, 6: 0.6, 7: 0.4, 8: 0.2, 12: 0.2}
+    for epoch, weight in expected.items():
+        assert abs(wta_loss_schedule(epoch) - weight) < 1e-6
+
+
+def test_wta_imitation_weights_require_safe_and_better() -> None:
+    indices = torch.tensor([0, 1, 0])
+    proposal_pdms = torch.tensor([[0.9, 0.1], [0.1, 0.9], [0.9, 0.1]])
+    gt_pdms = torch.tensor([0.8, 0.8, 0.8])
+    proposal_scores = torch.ones((3, 2, 7))
+    proposal_scores[1, 1, 3] = 0.0
+
+    weights, eligible = wta_imitation_weights(
+        indices, proposal_pdms, proposal_scores, gt_pdms, scheduled_weight=0.4
+    )
+
+    assert torch.equal(eligible, torch.tensor([True, False, True]))
+    assert torch.allclose(weights, torch.tensor([0.4, 1.0, 0.4]))

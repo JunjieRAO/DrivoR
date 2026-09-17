@@ -3,6 +3,48 @@ from typing import Dict
 import torch
 
 
+def wta_loss_schedule(
+    current_epoch: int,
+    start_epoch: int = 5,
+    end_epoch: int = 8,
+    minimum_weight: float = 0.2,
+) -> float:
+    """Linearly decay WTA weight from 1 before start_epoch to minimum_weight at end_epoch."""
+    if current_epoch < start_epoch:
+        return 1.0
+    if current_epoch >= end_epoch:
+        return minimum_weight
+    progress = (current_epoch - start_epoch + 1) / (end_epoch - start_epoch + 1)
+    return 1.0 - progress * (1.0 - minimum_weight)
+
+
+@torch.no_grad()
+def wta_imitation_weights(
+    wta_indices: torch.Tensor,
+    proposal_pdms: torch.Tensor,
+    proposal_scores: torch.Tensor,
+    gt_pdms: torch.Tensor,
+    scheduled_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return per-scene weights and the mask for safe WTA proposals that outperform GT."""
+    wta_pdms = proposal_pdms.gather(1, wta_indices[:, None]).squeeze(1)
+    wta_scores = proposal_scores.gather(
+        1, wta_indices[:, None, None].expand(-1, 1, proposal_scores.shape[-1])
+    ).squeeze(1)
+    safe = (
+        torch.isclose(wta_scores[:, 0], torch.ones_like(wta_scores[:, 0]))
+        & torch.isclose(wta_scores[:, 1], torch.ones_like(wta_scores[:, 1]))
+        & torch.isclose(wta_scores[:, 3], torch.ones_like(wta_scores[:, 3]))
+    )
+    eligible = safe & (wta_pdms > gt_pdms)
+    weights = torch.where(
+        eligible,
+        torch.full_like(wta_pdms, scheduled_weight),
+        torch.ones_like(wta_pdms),
+    )
+    return weights, eligible
+
+
 SAFETY_METRIC_NAMES = (
     "proposal_nc_zero_ratio",
     "proposal_dac_zero_ratio",
