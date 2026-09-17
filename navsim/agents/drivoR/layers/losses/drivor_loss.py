@@ -140,7 +140,7 @@ class DrivoRLoss(torch.nn.Module):
                         agent_class_weight: float = 1.0,
                         agent_box_weight: float = 1.0,
                         bev_semantic_weight: float = 1.0,
-                        collision_weight: float = 0.5,
+                        collision_weight: float = 0.0,
                         collision_margin: float = 0.7,
                         collision_filter_radius: float = 10.0,
                         wta_discount_start_epoch: int = 5,

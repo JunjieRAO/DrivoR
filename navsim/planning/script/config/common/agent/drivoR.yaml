@@ -114,7 +114,7 @@ loss:
   agent_box_weight: 0.1
   bev_semantic_weight: 1.0
   div_weight: 0.0
-  collision_weight: 0.5
+  collision_weight: 0.0
   collision_margin: 0.7
   collision_filter_radius: 10.0
   wta_discount_start_epoch: 5
