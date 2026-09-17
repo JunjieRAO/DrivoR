@@ -40,6 +40,7 @@ from navsim.common.dataclasses import PDMResults, SensorConfig
 from navsim.common.dataloader import MetricCacheLoader, SceneFilter, SceneLoader
 from navsim.evaluate.pdm_score import pdm_score, pdm_score_proposals
 from navsim.planning.script.builders.worker_pool_builder import build_worker
+from navsim.planning.script.proposal_evaluation_export import save_proposal_evaluation_workbook
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
 from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
@@ -141,6 +142,17 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
                 score_row.update(
                     {f"best_{key}": value for key, value in asdict(proposal_results[best_idx]).items()}
                 )
+                score_row["_proposal_details"] = {
+                    "token": token,
+                    "selected_proposal_idx": selected_idx,
+                    "best_proposal_idx": best_idx,
+                    "results": [asdict(result) for result in proposal_results],
+                    "predicted_pdm_scores": predicted_pdm_scores,
+                    "predicted_subscores": {
+                        metric_name: np.asarray(predicted_subscores[metric_name])
+                        for metric_name in PREDICTED_SUBSCORE_NAMES
+                    },
+                }
             else:
                 pdm_result = pdm_score(
                     metric_cache=metric_cache,
@@ -239,6 +251,11 @@ def main(cfg: DictConfig) -> None:
     worker = build_worker(cfg)
     score_rows: List[pd.DataFrame] = worker_map(worker, run_pdm_score, data_points)
 
+    proposal_details = [
+        score_row.pop("_proposal_details")
+        for score_row in score_rows
+        if "_proposal_details" in score_row
+    ]
     pdm_score_df = pd.DataFrame(score_rows)
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
     num_failed_scenarios = len(pdm_score_df) - num_sucessful_scenarios
@@ -256,7 +273,19 @@ def main(cfg: DictConfig) -> None:
 
     save_path = Path(cfg.output_dir)
     timestamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
-    pdm_score_df.to_csv(save_path / f"{timestamp}.csv")
+    csv_path = save_path / f"{timestamp}.csv"
+    pdm_score_df.to_csv(csv_path)
+    workbook_path = None
+    if cfg.evaluate_all_proposals:
+        workbook_path = save_path / f"{timestamp}.xlsx"
+        save_proposal_evaluation_workbook(
+            path=workbook_path,
+            summary=pdm_score_df,
+            proposal_details=proposal_details,
+            predictions=merged_predictions,
+            result_fields=[field.name for field in fields(PDMResults)],
+            predicted_subscore_names=PREDICTED_SUBSCORE_NAMES,
+        )
 
     logger.info(
         f"""
@@ -265,7 +294,8 @@ def main(cfg: DictConfig) -> None:
             Number of failed scenarios: {num_failed_scenarios}.
             Final average score of valid results: {average_row['score']}.
             Best-of-all-proposal average score: {average_row.get('best_score', 'not computed')}.
-            Results are stored in: {save_path / f"{timestamp}.csv"}.
+            Results are stored in: {csv_path}.
+            Proposal workbook: {workbook_path if workbook_path else 'not requested'}.
 
             All scores:
             {average_row}
