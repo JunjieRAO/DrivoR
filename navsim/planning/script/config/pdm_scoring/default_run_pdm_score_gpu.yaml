@@ -18,3 +18,4 @@ defaults:
 
 metric_cache_path: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache # path to metric cache
 evaluate_all_proposals: false # report oracle best score across every model proposal
+visualize_unsafe_scenes: 0 # render up to N scenes where selected real NC/DAC/TTC contains 0

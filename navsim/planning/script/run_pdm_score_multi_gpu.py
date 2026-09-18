@@ -45,6 +45,10 @@ from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PD
 from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
 from navsim.planning.training.dataset import Dataset
+from navsim.visualization.proposal_safety import (
+    render_proposal_safety_scene,
+    selected_is_unsafe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +290,35 @@ def main(cfg: DictConfig) -> None:
             result_fields=[field.name for field in fields(PDMResults)],
             predicted_subscore_names=PREDICTED_SUBSCORE_NAMES,
         )
+    visualization_dir = None
+    visualization_count = int(cfg.visualize_unsafe_scenes)
+    if visualization_count > 0:
+        if not cfg.evaluate_all_proposals:
+            raise ValueError("visualize_unsafe_scenes requires evaluate_all_proposals=true")
+        visualization_dir = save_path / "proposal_visualizations" / timestamp
+        visualization_dir.mkdir(parents=True, exist_ok=True)
+        unsafe_details = sorted(
+            (detail for detail in proposal_details if selected_is_unsafe(detail)),
+            key=lambda detail: detail["token"],
+        )[:visualization_count]
+        for detail in unsafe_details:
+            token = detail["token"]
+            scene = scene_loader_inference.get_scene_from_token(token)
+            render_proposal_safety_scene(
+                scene=scene,
+                token=token,
+                proposals=merged_predictions[token]["proposals"],
+                proposal_results=detail["results"],
+                selected_idx=int(detail["selected_proposal_idx"]),
+                oracle_idx=int(detail["best_proposal_idx"]),
+                output_path=visualization_dir / f"{token}.png",
+            )
+        logger.info(
+            "Rendered %d / %d requested unsafe selected-proposal scenes to %s",
+            len(unsafe_details),
+            visualization_count,
+            visualization_dir,
+        )
 
     logger.info(
         f"""
@@ -296,6 +329,7 @@ def main(cfg: DictConfig) -> None:
             Best-of-all-proposal average score: {average_row.get('best_score', 'not computed')}.
             Results are stored in: {csv_path}.
             Proposal workbook: {workbook_path if workbook_path else 'not requested'}.
+            Unsafe proposal visualizations: {visualization_dir if visualization_dir else 'not requested'}.
 
             All scores:
             {average_row}

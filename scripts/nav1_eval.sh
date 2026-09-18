@@ -6,6 +6,12 @@ GPU_IDS="${GPU_IDS:-0,1,2,3}"
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-16}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-8}"
 SCORING_WORKERS="${SCORING_WORKERS:-60}"
+VISUALIZE_UNSAFE_SCENES="${1:-${VISUALIZE_UNSAFE_SCENES:-0}}"
+
+if [[ ! "$VISUALIZE_UNSAFE_SCENES" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] Visualization count N must be a non-negative integer: $VISUALIZE_UNSAFE_SCENES" >&2
+  exit 1
+fi
 
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
@@ -24,6 +30,7 @@ python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" 
   agent.checkpoint_path="/mnt/workspace/roa7sgh/DrivoR/exp/ke/nav1_from_scratch/09.04_21.33/lightning_logs/version_0/checkpoints/best-epoch23-step38712.ckpt" \
   experiment_name=nav1_from_scratch_eval \
   evaluate_all_proposals=true \
+  visualize_unsafe_scenes="$VISUALIZE_UNSAFE_SCENES" \
   +trainer.params.devices=4 \
   trainer.params.strategy=ddp \
   dataloader.params.batch_size="$GPU_BATCH_SIZE" \
