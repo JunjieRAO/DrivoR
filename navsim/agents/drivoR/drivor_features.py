@@ -15,7 +15,7 @@ from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2
 from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType
 
-from navsim.common.dataclasses import AgentInput, Scene, Annotations
+from navsim.common.dataclasses import AgentInput, Scene, Annotations, NAVSIM_INTERVAL_LENGTH
 from navsim.common.enums import BoundingBoxIndex, LidarIndex
 from navsim.planning.scenario_builder.navsim_scenario_utils import tracked_object_types
 from navsim.planning.training.abstract_feature_target_builder import (
@@ -39,8 +39,22 @@ class DrivoRFeatureBuilder(AbstractFeatureBuilder):
         """Inherited, see superclass."""
 
         features = {}
-        data_camera = self._get_camera_feature(agent_input)
-        features.update(data_camera)
+        features.update(self._get_camera_feature(agent_input, frame_idx=-1))
+        history_camera = self._get_camera_feature(agent_input, frame_idx=-2)
+        features.update({f"history_{key}": value for key, value in history_camera.items()})
+
+        current_pose = torch.tensor(agent_input.ego_statuses[-1].ego_pose, dtype=torch.float32)
+        history_pose = torch.tensor(agent_input.ego_statuses[-2].ego_pose, dtype=torch.float32)
+        pose_delta = current_pose - history_pose
+        features["temporal_motion"] = torch.stack(
+            [
+                torch.tensor(NAVSIM_INTERVAL_LENGTH, dtype=torch.float32),
+                pose_delta[0],
+                pose_delta[1],
+                torch.sin(pose_delta[2]),
+                torch.cos(pose_delta[2]),
+            ]
+        )
 
 
         if len(self._config.lidar_pc) > 0:
@@ -64,14 +78,14 @@ class DrivoRFeatureBuilder(AbstractFeatureBuilder):
 
         return features
 
-    def _get_camera_feature(self, agent_input: AgentInput) -> torch.Tensor:
+    def _get_camera_feature(self, agent_input: AgentInput, frame_idx: int) -> Dict[str, torch.Tensor]:
         """
         Extract stitched camera from AgentInput
         :param agent_input: input dataclass
         :return: stitched front view image as torch tensor
         """
 
-        cameras = agent_input.cameras[-1]
+        cameras = agent_input.cameras[frame_idx]
 
         # cameras = [cameras.cam_b0, cameras.cam_f0, cameras.cam_l0, cameras.cam_l1, cameras.cam_l2, cameras.cam_r0, cameras.cam_r1, cameras.cam_r2]
 

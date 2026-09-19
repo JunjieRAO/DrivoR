@@ -26,17 +26,20 @@ config:
 
   tf_d_model: 256 # general feature size of the model
   tf_d_ffn: 1024 # hidden size of the heads
+  temporal_num_heads: 4
+  temporal_d_ffn: 512
+  temporal_dropout: 0.1
 
   ####################
   # sensor config
-  cam_f0: [3]
-  cam_l0: [3]
+  cam_f0: [2, 3]
+  cam_l0: [2, 3]
   cam_l1: []
   cam_l2: []
-  cam_r0: [3]
+  cam_r0: [2, 3]
   cam_r1: []
   cam_r2: []
-  cam_b0: [3]
+  cam_b0: [2, 3]
   lidar_pc: []
 
 

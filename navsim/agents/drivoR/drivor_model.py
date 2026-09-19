@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from .score_module.scorer import Scorer
 from .transformer_decoder import TransformerDecoder, TransformerDecoderScorer
+from .temporal_fusion import TemporalFusion
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
 from navsim.agents.drivoR.utils import pylogger
@@ -54,6 +55,12 @@ class DrivoRModel(nn.Module):
             config_image_backbone["tf_d_model"] = config["tf_d_model"]
             self.image_backbone = ImgEncoder(config_image_backbone)
             self.scene_embeds = nn.Parameter(torch.randn(1, self.num_cams, self._config.num_scene_tokens, self.image_backbone.num_features)*1e-6, requires_grad=True)
+            self.temporal_fusion = TemporalFusion(
+                d_model=config.tf_d_model,
+                num_heads=config.temporal_num_heads,
+                d_ffn=config.temporal_d_ffn,
+                dropout=config.temporal_dropout,
+            )
 
             # print("self.scene_embeds ", self.scene_embeds)
 
@@ -146,6 +153,14 @@ class DrivoRModel(nn.Module):
 
             scene_tokens = self.scene_embeds.repeat(batch_size, 1, 1, 1)
             image_scene_tokens = self.image_backbone(img, scene_tokens)
+            history_image_scene_tokens = self.image_backbone(
+                features["history_image"], scene_tokens
+            )
+            image_scene_tokens = self.temporal_fusion(
+                image_scene_tokens,
+                history_image_scene_tokens,
+                features["temporal_motion"],
+            )
 
             log.debug(f"Backbone image - {image_scene_tokens.shape}")
             scene_features.append(image_scene_tokens)
