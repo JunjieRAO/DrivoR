@@ -18,3 +18,9 @@ defaults:
 
 metric_cache_path: ${oc.env:NAVSIM_EXP_ROOT}/metric_cache # path to metric cache
 evaluate_all_proposals: false # report oracle best score across every model proposal
+
+gradient_sensitivity:
+  enabled: false
+  etas: [0.001]
+  normalize: false
+  epsilon: 1.0e-12

@@ -18,7 +18,13 @@ def _rowwise_isin(tensor_1: torch.Tensor, target_tensor: torch.Tensor) -> torch.
 class AgentLightningModule(pl.LightningModule):
     """Pytorch lightning wrapper for learnable agent."""
 
-    def __init__(self, agent: AbstractAgent, for_viz=False, export_all_proposals=False):
+    def __init__(
+        self,
+        agent: AbstractAgent,
+        for_viz=False,
+        export_all_proposals=False,
+        gradient_sensitivity_config=None,
+    ):
         """
         Initialise the lightning module wrapper.
         :param agent: agent interface in NAVSIM
@@ -28,6 +34,74 @@ class AgentLightningModule(pl.LightningModule):
         self.checkpoint_file=None
         self.for_viz = for_viz
         self.export_all_proposals = export_all_proposals
+        self.gradient_sensitivity_config = gradient_sensitivity_config or {}
+
+    def _compute_gradient_sensitivity(self, predictions):
+        if torch.is_inference_mode_enabled():
+            raise RuntimeError(
+                "Gradient sensitivity requires trainer.params.inference_mode=false"
+            )
+
+        metric_keys = {
+            "NC": "no_at_fault_collisions",
+            "DAC": "drivable_area_compliance",
+            "TTC": "time_to_collision_within_bound",
+        }
+        proposals = predictions["proposals"].detach().requires_grad_(True)
+        scene_features = predictions["scorer_scene_features"].detach()
+        ego_token = predictions["scorer_ego_token"].detach()
+        model = self.agent._drivor_model
+
+        with torch.enable_grad():
+            pred_logit = model.score_proposals(
+                proposals, scene_features, ego_token, detach_proposals=False
+            )[0]
+            gradients = {}
+            gradient_calls = len(metric_keys) * proposals.shape[1]
+            call_index = 0
+            for short_name, metric_name in metric_keys.items():
+                metric_scores = torch.sigmoid(pred_logit[metric_name])
+                metric_gradients = torch.empty_like(proposals)
+                for proposal_idx in range(proposals.shape[1]):
+                    call_index += 1
+                    full_gradient = torch.autograd.grad(
+                        metric_scores[:, proposal_idx].sum(),
+                        proposals,
+                        retain_graph=call_index < gradient_calls,
+                    )[0]
+                    metric_gradients[:, proposal_idx] = full_gradient[:, proposal_idx]
+                gradients[short_name] = metric_gradients.detach()
+
+        normalize = bool(self.gradient_sensitivity_config.get("normalize", False))
+        epsilon = float(self.gradient_sensitivity_config.get("epsilon", 1e-12))
+        etas = [float(value) for value in self.gradient_sensitivity_config.get("etas", [1e-3])]
+        base_proposals = proposals.detach()
+        variants = {}
+        gradient_stats = {}
+        for short_name, gradient in gradients.items():
+            flat_gradient = gradient.flatten(start_dim=2)
+            gradient_norm = torch.linalg.vector_norm(flat_gradient, dim=-1)
+            update_direction = gradient
+            if normalize:
+                update_direction = gradient / gradient_norm.clamp_min(epsilon)[..., None, None]
+
+            gradient_stats[short_name] = {
+                "norm": gradient_norm.cpu(),
+                "xy_norm": torch.linalg.vector_norm(
+                    gradient[..., :2].flatten(start_dim=2), dim=-1
+                ).cpu(),
+                "heading_norm": torch.linalg.vector_norm(
+                    gradient[..., 2], dim=-1
+                ).cpu(),
+            }
+            for eta in etas:
+                eta_key = f"{eta:.12g}"
+                variants.setdefault(eta_key, {})[short_name] = {
+                    "up": (base_proposals + eta * update_direction).cpu(),
+                    "down": (base_proposals - eta * update_direction).cpu(),
+                }
+
+        return variants, gradient_stats
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -161,6 +235,11 @@ class AgentLightningModule(pl.LightningModule):
                 final_trajectories = predictions["proposals"]
                 _, _, final_scores, _, _ = self.agent.compute_score(targets, final_trajectories)
                 ego_status = features["ego_status"]
+        gradient_variants = gradient_stats = None
+        if self.gradient_sensitivity_config.get("enabled", False):
+            if not self.export_all_proposals:
+                raise ValueError("Gradient sensitivity requires export_all_proposals=true")
+            gradient_variants, gradient_stats = self._compute_gradient_sensitivity(predictions)
         result = {}
         for index, (pose, token) in enumerate(zip(poses.cpu().numpy(), tokens)):
             proposal = Trajectory(pose)
@@ -192,4 +271,28 @@ class AgentLightningModule(pl.LightningModule):
                     result[token]['predicted_pdm_scores'] = (
                         predicted_pdm_scores[index].detach().cpu().numpy()
                     )
+                    if gradient_variants is not None:
+                        result[token]["gradient_normalized"] = bool(
+                            self.gradient_sensitivity_config.get("normalize", False)
+                        )
+                        result[token]["gradient_variants"] = {
+                            eta: {
+                                metric: {
+                                    direction: [
+                                        Trajectory(variant_poses)
+                                        for variant_poses in direction_poses[index].numpy()
+                                    ]
+                                    for direction, direction_poses in metric_variants.items()
+                                }
+                                for metric, metric_variants in eta_variants.items()
+                            }
+                            for eta, eta_variants in gradient_variants.items()
+                        }
+                        result[token]["gradient_stats"] = {
+                            metric: {
+                                stat_name: stat_values[index].numpy()
+                                for stat_name, stat_values in metric_stats.items()
+                            }
+                            for metric, metric_stats in gradient_stats.items()
+                        }
         return result

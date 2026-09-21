@@ -114,6 +114,15 @@ class DrivoRModel(nn.Module):
             getattr(self, name).eval()
         return self
 
+    def score_proposals(self, proposals, scene_features, ego_token, detach_proposals=True):
+        scorer_proposals = proposals.detach() if detach_proposals else proposals
+        batch_size, proposal_count = scorer_proposals.shape[:2]
+        embedded_traj = self.pos_embed(
+            scorer_proposals.reshape(batch_size, proposal_count, -1)
+        )
+        scorer_features = self.scorer_attention(embedded_traj, scene_features) + ego_token
+        return self.scorer(scorer_proposals, scorer_features)
+
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         
@@ -183,12 +192,9 @@ class DrivoRModel(nn.Module):
         output["proposal_list"] = proposal_list
 
         # scoring
-        B,N,_,_=proposals.shape
-
-        embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
-        tr_out = tr_out+ego_token
-        pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
+        pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels = self.score_proposals(
+            proposals, scene_features, ego_token
+        )
 
         output["pred_logit"]=pred_logit
         output["pred_logit2"]=pred_logit2
@@ -197,6 +203,8 @@ class DrivoRModel(nn.Module):
         output["bev_semantic_map"]=bev_semantic_map
         output["agent_states"]=agent_states
         output["agent_labels"]=agent_labels
+        output["scorer_scene_features"] = scene_features
+        output["scorer_ego_token"] = ego_token
 
         pdm_score = (
         self._config.noc * pred_logit['no_at_fault_collisions'].sigmoid().log() +
