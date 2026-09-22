@@ -1,8 +1,10 @@
+import hashlib
 from time import sleep
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from typing import Dict, Tuple, Any, List
 from navsim.common.dataclasses import Trajectory
@@ -36,7 +38,59 @@ class AgentLightningModule(pl.LightningModule):
         self.export_all_proposals = export_all_proposals
         self.gradient_sensitivity_config = gradient_sensitivity_config or {}
 
-    def _compute_gradient_sensitivity(self, predictions):
+    @staticmethod
+    def _smooth_xy_gradient(xy_gradient: Tensor, sigma: float, kernel_size: int) -> Tensor:
+        if kernel_size % 2 == 0 or kernel_size < 3:
+            raise ValueError("smooth_kernel_size must be an odd integer >= 3")
+        offsets = torch.arange(
+            kernel_size, device=xy_gradient.device, dtype=xy_gradient.dtype
+        ) - kernel_size // 2
+        kernel = torch.exp(-0.5 * (offsets / sigma) ** 2)
+        kernel = (kernel / kernel.sum()).repeat(2, 1, 1)
+        flattened = xy_gradient.reshape(-1, xy_gradient.shape[-2], 2).transpose(1, 2)
+        padded = F.pad(flattened, (kernel_size // 2, kernel_size // 2), mode="reflect")
+        return F.conv1d(padded, kernel, groups=2).transpose(1, 2).reshape_as(xy_gradient)
+
+    @staticmethod
+    def _poses_from_xy(base_proposals: Tensor, xy_delta: Tensor) -> Tensor:
+        updated_xy = base_proposals[..., :2] + xy_delta
+        origin = torch.zeros_like(updated_xy[..., :1, :])
+        segments = torch.diff(torch.cat((origin, updated_xy), dim=-2), dim=-2)
+        recomputed_heading = torch.atan2(
+            segments[..., 1], segments[..., 0]
+        ).unsqueeze(-1)
+        has_displacement = xy_delta.abs().amax(dim=(-2, -1), keepdim=True) > 0
+        heading = torch.where(
+            has_displacement, recomputed_heading, base_proposals[..., 2:3]
+        )
+        return torch.cat((updated_xy, heading), dim=-1)
+
+    @staticmethod
+    def _normalize_max_xy(xy_direction: Tensor, epsilon: float) -> Tensor:
+        max_norm = torch.linalg.vector_norm(xy_direction, dim=-1).amax(dim=-1)
+        return xy_direction / max_norm.clamp_min(epsilon)[..., None, None]
+
+    @staticmethod
+    def _random_xy_direction(
+        reference: Tensor, tokens: List[str], target: str, gradient_type: str
+    ) -> Tensor:
+        random_direction = torch.empty_like(reference)
+        for batch_idx, token in enumerate(tokens):
+            for proposal_idx in range(reference.shape[1]):
+                seed_text = f"{token}:{proposal_idx}:{target}:{gradient_type}"
+                seed = int.from_bytes(
+                    hashlib.sha256(seed_text.encode("utf-8")).digest()[:8], "little"
+                )
+                generator = torch.Generator(device=reference.device).manual_seed(seed)
+                random_direction[batch_idx, proposal_idx] = torch.randn(
+                    reference.shape[-2:],
+                    dtype=reference.dtype,
+                    device=reference.device,
+                    generator=generator,
+                )
+        return random_direction
+
+    def _compute_gradient_sensitivity(self, predictions, tokens: List[str]):
         if torch.is_inference_mode_enabled():
             raise RuntimeError(
                 "Gradient sensitivity requires trainer.params.inference_mode=false"
@@ -72,19 +126,25 @@ class AgentLightningModule(pl.LightningModule):
                     metric_gradients[:, proposal_idx] = full_gradient[:, proposal_idx]
                 gradients[short_name] = metric_gradients.detach()
 
-        normalize = bool(self.gradient_sensitivity_config.get("normalize", False))
         epsilon = float(self.gradient_sensitivity_config.get("epsilon", 1e-12))
-        etas = [float(value) for value in self.gradient_sensitivity_config.get("etas", [1e-3])]
+        displacements = [
+            float(value)
+            for value in self.gradient_sensitivity_config.get(
+                "displacements", [0.1, 0.3, 0.5, 0.7]
+            )
+        ]
+        sigma = float(self.gradient_sensitivity_config.get("smooth_sigma", 1.0))
+        kernel_size = int(self.gradient_sensitivity_config.get("smooth_kernel_size", 5))
+        if sigma <= 0:
+            raise ValueError("smooth_sigma must be positive")
+        if any(displacement <= 0 for displacement in displacements):
+            raise ValueError("gradient displacements must all be positive")
         base_proposals = proposals.detach()
         variants = {}
         gradient_stats = {}
         for short_name, gradient in gradients.items():
             flat_gradient = gradient.flatten(start_dim=2)
             gradient_norm = torch.linalg.vector_norm(flat_gradient, dim=-1)
-            update_direction = gradient
-            if normalize:
-                update_direction = gradient / gradient_norm.clamp_min(epsilon)[..., None, None]
-
             gradient_stats[short_name] = {
                 "norm": gradient_norm.cpu(),
                 "xy_norm": torch.linalg.vector_norm(
@@ -94,12 +154,37 @@ class AgentLightningModule(pl.LightningModule):
                     gradient[..., 2], dim=-1
                 ).cpu(),
             }
-            for eta in etas:
-                eta_key = f"{eta:.12g}"
-                variants.setdefault(eta_key, {})[short_name] = {
-                    "up": (base_proposals + eta * update_direction).cpu(),
-                    "down": (base_proposals - eta * update_direction).cpu(),
-                }
+            raw_xy = gradient[..., :2]
+            directions = {
+                "raw": self._normalize_max_xy(raw_xy, epsilon),
+                "smooth": self._normalize_max_xy(
+                    self._smooth_xy_gradient(raw_xy, sigma, kernel_size), epsilon
+                ),
+            }
+            for gradient_type, up_direction in directions.items():
+                random_direction = self._random_xy_direction(
+                    up_direction, tokens, short_name, gradient_type
+                )
+                if gradient_type == "smooth":
+                    random_direction = self._smooth_xy_gradient(
+                        random_direction, sigma, kernel_size
+                    )
+                random_direction = self._normalize_max_xy(random_direction, epsilon)
+                for displacement in displacements:
+                    displacement_key = f"{displacement:.12g}"
+                    variants.setdefault(displacement_key, {}).setdefault(
+                        short_name, {}
+                    )[gradient_type] = {
+                        "up": self._poses_from_xy(
+                            base_proposals, displacement * up_direction
+                        ).cpu(),
+                        "down": self._poses_from_xy(
+                            base_proposals, -displacement * up_direction
+                        ).cpu(),
+                        "random": self._poses_from_xy(
+                            base_proposals, displacement * random_direction
+                        ).cpu(),
+                    }
 
         return variants, gradient_stats
 
@@ -239,7 +324,9 @@ class AgentLightningModule(pl.LightningModule):
         if self.gradient_sensitivity_config.get("enabled", False):
             if not self.export_all_proposals:
                 raise ValueError("Gradient sensitivity requires export_all_proposals=true")
-            gradient_variants, gradient_stats = self._compute_gradient_sensitivity(predictions)
+            gradient_variants, gradient_stats = self._compute_gradient_sensitivity(
+                predictions, tokens
+            )
         result = {}
         for index, (pose, token) in enumerate(zip(poses.cpu().numpy(), tokens)):
             proposal = Trajectory(pose)
@@ -272,21 +359,21 @@ class AgentLightningModule(pl.LightningModule):
                         predicted_pdm_scores[index].detach().cpu().numpy()
                     )
                     if gradient_variants is not None:
-                        result[token]["gradient_normalized"] = bool(
-                            self.gradient_sensitivity_config.get("normalize", False)
-                        )
                         result[token]["gradient_variants"] = {
-                            eta: {
+                            displacement: {
                                 metric: {
-                                    direction: [
-                                        Trajectory(variant_poses)
-                                        for variant_poses in direction_poses[index].numpy()
-                                    ]
-                                    for direction, direction_poses in metric_variants.items()
+                                    gradient_type: {
+                                        direction: [
+                                            Trajectory(variant_poses)
+                                            for variant_poses in direction_poses[index].numpy()
+                                        ]
+                                        for direction, direction_poses in type_variants.items()
+                                    }
+                                    for gradient_type, type_variants in metric_variants.items()
                                 }
                                 for metric, metric_variants in eta_variants.items()
                             }
-                            for eta, eta_variants in gradient_variants.items()
+                            for displacement, eta_variants in gradient_variants.items()
                         }
                         result[token]["gradient_stats"] = {
                             metric: {

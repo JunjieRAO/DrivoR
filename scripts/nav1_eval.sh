@@ -28,7 +28,7 @@ python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" 
   trainer.params.strategy=ddp \
   dataloader.params.batch_size="$GPU_BATCH_SIZE" \
   dataloader.params.num_workers="$DATALOADER_WORKERS" \
-  metric_cache_path="/mnt/workspace/hru4sgh/NAVSIM/dataset/matric_cache/metric_cache_navtest" \
+  metric_cache_path="/mnt/workspace/hru4sgh/NAVSIM/dataset/metric_cache/metric_cache_navtest" \
   agent.config.proposal_num=64 \
   agent.config.refiner_ls_values=0.0 \
   agent.config.image_backbone.focus_front_cam=false \

@@ -4,13 +4,16 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-/mnt/workspace/roa7sgh/DrivoR}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
 CHECKPOINT_PATH="${CHECKPOINT_PATH:-$REPO_ROOT/weights/drivor_Nav1_25epochs.pth}"
-METRIC_CACHE_PATH="${METRIC_CACHE_PATH:-$DATA_ROOT/matric_cache/metric_cache_navtest}"
+METRIC_CACHE_PATH="${METRIC_CACHE_PATH:-$DATA_ROOT/metric_cache/metric_cache_navtest}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
 GPU_BATCH_SIZE="${GPU_BATCH_SIZE:-16}"
 DATALOADER_WORKERS="${DATALOADER_WORKERS:-8}"
 SCORING_WORKERS="${SCORING_WORKERS:-60}"
-GRADIENT_ETAS="${GRADIENT_ETAS:-[0.001]}"
-NORMALIZE_GRADIENT="${NORMALIZE_GRADIENT:-false}"
+SCENE_COUNT="${SCENE_COUNT:-2000}"
+SAMPLE_SEED="${SAMPLE_SEED:-0}"
+DISPLACEMENTS="${DISPLACEMENTS:-[0.1,0.3,0.5,0.7]}"
+SMOOTH_SIGMA="${SMOOTH_SIGMA:-1.0}"
+SMOOTH_KERNEL_SIZE="${SMOOTH_KERNEL_SIZE:-5}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-nav1_gradient_sensitivity}"
 
 for path in \
@@ -48,8 +51,10 @@ export HYDRA_FULL_ERROR=1
 echo "[INFO] Checkpoint: $CHECKPOINT_PATH"
 echo "[INFO] GPUs: $GPU_IDS ($NUM_GPUS device(s))"
 echo "[INFO] Batch size: $GPU_BATCH_SIZE per GPU, $((GPU_BATCH_SIZE * NUM_GPUS)) global"
-echo "[INFO] Gradient etas: $GRADIENT_ETAS; normalized: $NORMALIZE_GRADIENT"
-echo "[INFO] Each eta evaluates 64 base proposals and 384 perturbed proposals per scene."
+echo "[INFO] Scenes: $SCENE_COUNT; sample seed: $SAMPLE_SEED"
+echo "[INFO] XY displacements: $DISPLACEMENTS m"
+echo "[INFO] Smooth gradient: Gaussian sigma=$SMOOTH_SIGMA, kernel=$SMOOTH_KERNEL_SIZE"
+echo "[INFO] Each displacement evaluates raw/smooth x up/down/random for NC/DAC/TTC."
 
 python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" \
   worker.threads_per_node="$SCORING_WORKERS" \
@@ -59,8 +64,11 @@ python3 "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_pdm_score_multi_gpu.py" 
   experiment_name="$EXPERIMENT_NAME" \
   evaluate_all_proposals=true \
   gradient_sensitivity.enabled=true \
-  gradient_sensitivity.etas="$GRADIENT_ETAS" \
-  gradient_sensitivity.normalize="$NORMALIZE_GRADIENT" \
+  gradient_sensitivity.scene_count="$SCENE_COUNT" \
+  gradient_sensitivity.sample_seed="$SAMPLE_SEED" \
+  gradient_sensitivity.displacements="$DISPLACEMENTS" \
+  gradient_sensitivity.smooth_sigma="$SMOOTH_SIGMA" \
+  gradient_sensitivity.smooth_kernel_size="$SMOOTH_KERNEL_SIZE" \
   +trainer.params.devices="$NUM_GPUS" \
   trainer.params.strategy="$TRAINER_STRATEGY" \
   +trainer.params.inference_mode=false \

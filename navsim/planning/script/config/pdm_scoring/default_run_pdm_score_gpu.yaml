@@ -21,6 +21,9 @@ evaluate_all_proposals: false # report oracle best score across every model prop
 
 gradient_sensitivity:
   enabled: false
-  etas: [0.001]
-  normalize: false
+  displacements: [0.1, 0.3, 0.5, 0.7]
+  scene_count: 2000
+  sample_seed: 0
+  smooth_sigma: 1.0
+  smooth_kernel_size: 5
   epsilon: 1.0e-12

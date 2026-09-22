@@ -78,54 +78,53 @@ def _append_gradient_rows(
     predicted_subscores = prediction["predicted_subscores"]
     predicted_pdm_scores = np.asarray(prediction["predicted_pdm_scores"])
     base_trajectories = prediction["proposals"]
-    normalize = bool(prediction.get("gradient_normalized", False))
-
-    for eta_text, eta_variants in prediction["gradient_variants"].items():
-        eta = float(eta_text)
-        for target, metric_variants in eta_variants.items():
+    for displacement_text, displacement_variants in prediction["gradient_variants"].items():
+        displacement = float(displacement_text)
+        for target, metric_variants in displacement_variants.items():
             stats = prediction["gradient_stats"][target]
-            for direction, trajectories in metric_variants.items():
-                updated_results = pdm_score_proposals(
-                    metric_cache=metric_cache,
-                    model_trajectories=trajectories,
-                    future_sampling=simulator.proposal_sampling,
-                    simulator=simulator,
-                    scorer=scorer,
-                )
-                for proposal_idx, (base_result, updated_result) in enumerate(
-                    zip(base_results, updated_results)
-                ):
-                    base_values = asdict(base_result)
-                    updated_values = asdict(updated_result)
-                    pose_delta = trajectories[proposal_idx].poses - base_trajectories[proposal_idx].poses
-                    row = {
-                        "token": token,
-                        "proposal_idx": proposal_idx,
-                        "selected": proposal_idx == prediction["selected_proposal_idx"],
-                        "target": target,
-                        "direction": direction,
-                        "eta": eta,
-                        "normalized_gradient": normalize,
-                        "gradient_norm": float(stats["norm"][proposal_idx]),
-                        "xy_gradient_norm": float(stats["xy_norm"][proposal_idx]),
-                        "heading_gradient_norm": float(stats["heading_norm"][proposal_idx]),
-                        "max_xy_delta": float(np.linalg.norm(pose_delta[:, :2], axis=-1).max()),
-                        "max_heading_delta": float(np.abs(pose_delta[:, 2]).max()),
-                        "initial_pred_PDMS": float(predicted_pdm_scores[proposal_idx]),
-                    }
-                    for short_name, metric_name in GRADIENT_METRICS.items():
-                        row[f"initial_pred_{short_name}"] = float(
-                            predicted_subscores[metric_name][proposal_idx]
-                        )
-                        row[f"initial_true_{short_name}"] = float(base_values[metric_name])
-                        row[f"updated_true_{short_name}"] = float(updated_values[metric_name])
-                        row[f"delta_{short_name}"] = float(
-                            updated_values[metric_name] - base_values[metric_name]
-                        )
-                    row["initial_PDMS"] = float(base_values["score"])
-                    row["updated_PDMS"] = float(updated_values["score"])
-                    row["delta_PDMS"] = float(updated_values["score"] - base_values["score"])
-                    rows.append(row)
+            for gradient_type, type_variants in metric_variants.items():
+                for direction, trajectories in type_variants.items():
+                    updated_results = pdm_score_proposals(
+                        metric_cache=metric_cache,
+                        model_trajectories=trajectories,
+                        future_sampling=simulator.proposal_sampling,
+                        simulator=simulator,
+                        scorer=scorer,
+                    )
+                    for proposal_idx, (base_result, updated_result) in enumerate(
+                        zip(base_results, updated_results)
+                    ):
+                        base_values = asdict(base_result)
+                        updated_values = asdict(updated_result)
+                        pose_delta = trajectories[proposal_idx].poses - base_trajectories[proposal_idx].poses
+                        row = {
+                            "token": token,
+                            "proposal_idx": proposal_idx,
+                            "selected": proposal_idx == prediction["selected_proposal_idx"],
+                            "target": target,
+                            "gradient_type": gradient_type,
+                            "direction": direction,
+                            "displacement": displacement,
+                            "gradient_norm": float(stats["norm"][proposal_idx]),
+                            "xy_gradient_norm": float(stats["xy_norm"][proposal_idx]),
+                            "heading_gradient_norm": float(stats["heading_norm"][proposal_idx]),
+                            "max_xy_delta": float(np.linalg.norm(pose_delta[:, :2], axis=-1).max()),
+                            "max_heading_delta": float(np.abs(pose_delta[:, 2]).max()),
+                            "initial_pred_PDMS": float(predicted_pdm_scores[proposal_idx]),
+                        }
+                        for short_name, metric_name in GRADIENT_METRICS.items():
+                            row[f"initial_pred_{short_name}"] = float(
+                                predicted_subscores[metric_name][proposal_idx]
+                            )
+                            row[f"initial_true_{short_name}"] = float(base_values[metric_name])
+                            row[f"updated_true_{short_name}"] = float(updated_values[metric_name])
+                            row[f"delta_{short_name}"] = float(
+                                updated_values[metric_name] - base_values[metric_name]
+                            )
+                        row["initial_PDMS"] = float(base_values["score"])
+                        row["updated_PDMS"] = float(updated_values["score"])
+                        row["delta_PDMS"] = float(updated_values["score"] - base_values["score"])
+                        rows.append(row)
 
 
 def _write_gradient_summaries(
@@ -136,120 +135,73 @@ def _write_gradient_summaries(
 
     tolerance = 1e-6
     detail_df = pd.DataFrame(detail_rows)
+
+    base_columns = ["token", "proposal_idx", "target"]
+    base_df = detail_df.drop_duplicates(base_columns).copy()
+    base_df["subset_failure"] = base_df.apply(
+        lambda row: row["initial_true_NC"] == 0.0
+        if row["target"] == "NC"
+        else row[f"initial_true_{row['target']}"] < 1.0,
+        axis=1,
+    )
+    base_df["subset_near_boundary_safe"] = False
+    for target, group in base_df.groupby("target"):
+        true_column = f"initial_true_{target}"
+        pred_column = f"initial_pred_{target}"
+        safe = group[true_column] >= 1.0
+        threshold = group.loc[safe, pred_column].quantile(0.1)
+        base_df.loc[group.index, "subset_near_boundary_safe"] = (
+            safe & (group[pred_column] <= threshold)
+        )
+    detail_df = detail_df.merge(
+        base_df[base_columns + ["subset_failure", "subset_near_boundary_safe"]],
+        on=base_columns,
+        how="left",
+        validate="many_to_one",
+    )
     detail_df.to_csv(output_dir / f"{timestamp}_gradient_details.csv", index=False)
 
-    summary_rows = []
-    group_columns = ["target", "eta", "direction"]
-    for keys, group in detail_df.groupby(group_columns, sort=True):
-        delta = group["delta_PDMS"]
-        target = keys[0]
-        summary_rows.append({
-            "target": target,
-            "eta": keys[1],
-            "direction": keys[2],
-            "proposals": len(group),
-            "zero_gradient_rate": float((group["gradient_norm"] <= 1e-12).mean()),
-            "mean_delta_target": float(group[f"delta_{target}"].mean()),
-            "mean_delta_PDMS": float(delta.mean()),
-            "median_delta_PDMS": float(delta.median()),
-            "improve_rate": float((delta > tolerance).mean()),
-            "degrade_rate": float((delta < -tolerance).mean()),
-            "unchanged_rate": float((delta.abs() <= tolerance).mean()),
-        })
-    summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv(output_dir / f"{timestamp}_gradient_summary.csv", index=False)
-
-    initial_group_rows = []
-    for (target, eta, direction), group in detail_df.groupby(group_columns, sort=True):
-        initial_column = f"initial_true_{target}"
-        for initial_value, subgroup in group.groupby(initial_column, sort=True):
-            delta = subgroup["delta_PDMS"]
-            initial_group_rows.append({
-                "target": target,
-                "eta": eta,
-                "direction": direction,
-                "initial_true_metric": initial_value,
-                "proposals": len(subgroup),
-                "mean_delta_target": float(subgroup[f"delta_{target}"].mean()),
-                "mean_delta_PDMS": float(delta.mean()),
-                "improve_rate": float((delta > tolerance).mean()),
-                "degrade_rate": float((delta < -tolerance).mean()),
-                "unchanged_rate": float((delta.abs() <= tolerance).mean()),
-            })
-    pd.DataFrame(initial_group_rows).to_csv(
-        output_dir / f"{timestamp}_gradient_by_initial_score.csv", index=False
-    )
-
-    pair_keys = ["token", "proposal_idx", "target", "eta"]
-    paired = detail_df.pivot(index=pair_keys, columns="direction", values="updated_PDMS").dropna()
-    paired["up_minus_down_PDMS"] = paired["up"] - paired["down"]
-    direction_rows = []
-    for (target, eta), group in paired.groupby(level=["target", "eta"], sort=True):
-        difference = group["up_minus_down_PDMS"]
-        changed = difference.abs() > tolerance
-        direction_rows.append({
-            "target": target,
-            "eta": eta,
-            "pairs": len(group),
-            "mean_up_minus_down_PDMS": float(difference.mean()),
-            "up_win_rate": float((difference > tolerance).mean()),
-            "down_win_rate": float((difference < -tolerance).mean()),
-            "tie_rate": float((~changed).mean()),
-            "up_win_rate_among_changed": float(
-                (difference[changed] > tolerance).mean() if changed.any() else np.nan
-            ),
-        })
-    direction_df = pd.DataFrame(direction_rows)
-    direction_df.to_csv(output_dir / f"{timestamp}_gradient_direction.csv", index=False)
-
-    correlation_rows = []
-    for (target, eta, direction), group in detail_df.groupby(group_columns, sort=True):
-        correlation_rows.append({
-            "target": target,
-            "eta": eta,
-            "direction": direction,
-            "spearman_gradient_norm_delta_target": group["gradient_norm"].corr(
-                group[f"delta_{target}"], method="spearman"
-            ),
-            "spearman_gradient_norm_delta_PDMS": group["gradient_norm"].corr(
-                group["delta_PDMS"], method="spearman"
-            ),
-            "spearman_initial_pred_delta_target": group[f"initial_pred_{target}"].corr(
-                group[f"delta_{target}"], method="spearman"
-            ),
-            "spearman_initial_true_delta_PDMS": group[f"initial_true_{target}"].corr(
-                group["delta_PDMS"], method="spearman"
-            ),
-        })
-    pd.DataFrame(correlation_rows).to_csv(
-        output_dir / f"{timestamp}_gradient_correlations.csv", index=False
-    )
-
-    conclusion_lines = ["Gradient alignment summary", ""]
-    for _, direction_row in direction_df.iterrows():
-        up_summary = summary_df[
-            (summary_df["target"] == direction_row["target"])
-            & (summary_df["eta"] == direction_row["eta"])
-            & (summary_df["direction"] == "up")
-        ].iloc[0]
-        if direction_row["up_win_rate"] > direction_row["down_win_rate"] and up_summary["mean_delta_PDMS"] > 0:
-            verdict = "positive alignment"
-        elif direction_row["up_win_rate"] > direction_row["down_win_rate"]:
-            verdict = "directionally aligned but not PDMS-improving on average"
-        elif direction_row["down_win_rate"] > direction_row["up_win_rate"]:
-            verdict = "opposite or unreliable alignment"
-        else:
-            verdict = "no measurable directional alignment"
-        conclusion_lines.append(
-            f"{direction_row['target']} eta={direction_row['eta']:.6g}: {verdict}; "
-            f"mean delta PDMS(up)={up_summary['mean_delta_PDMS']:.6g}, "
-            f"improve/degrade/unchanged={up_summary['improve_rate']:.1%}/"
-            f"{up_summary['degrade_rate']:.1%}/{up_summary['unchanged_rate']:.1%}, "
-            f"up/down/tie={direction_row['up_win_rate']:.1%}/"
-            f"{direction_row['down_win_rate']:.1%}/{direction_row['tie_rate']:.1%}."
-        )
-    (output_dir / f"{timestamp}_gradient_conclusions.txt").write_text(
-        "\n".join(conclusion_lines) + "\n", encoding="utf-8"
+    pair_keys = ["token", "proposal_idx", "target", "gradient_type", "displacement"]
+    value_columns = ["updated_PDMS", "updated_true_NC", "updated_true_DAC", "updated_true_TTC"]
+    paired = detail_df.pivot(index=pair_keys, columns="direction", values=value_columns)
+    subset_lookup = detail_df.drop_duplicates(pair_keys).set_index(pair_keys)
+    pairwise_rows = []
+    subset_masks = {
+        "all": pd.Series(True, index=paired.index),
+        "failure": subset_lookup["subset_failure"],
+        "near_boundary_safe": subset_lookup["subset_near_boundary_safe"],
+    }
+    for (target, gradient_type, displacement), group in paired.groupby(
+        level=["target", "gradient_type", "displacement"], sort=True
+    ):
+        for subset_name, full_mask in subset_masks.items():
+            mask = full_mask.reindex(group.index).fillna(False)
+            subset = group.loc[mask]
+            for metric_label, metric_column in (
+                ("true_target", f"updated_true_{target}"),
+                ("PDMS", "updated_PDMS"),
+            ):
+                for baseline in ("down", "random"):
+                    difference = subset[(metric_column, "up")] - subset[(metric_column, baseline)]
+                    changed = difference.abs() > tolerance
+                    pairwise_rows.append({
+                        "target": target,
+                        "gradient_type": gradient_type,
+                        "displacement": displacement,
+                        "subset": subset_name,
+                        "metric": metric_label,
+                        "comparison": f"up_vs_{baseline}",
+                        "pairs": len(difference),
+                        "scenes": difference.index.get_level_values("token").nunique(),
+                        "up_win_rate": float((difference > tolerance).mean()),
+                        "baseline_win_rate": float((difference < -tolerance).mean()),
+                        "tie_rate": float((~changed).mean()),
+                        "up_win_rate_among_changed": float(
+                            (difference[changed] > tolerance).mean() if changed.any() else np.nan
+                        ),
+                    })
+    pd.DataFrame(pairwise_rows).to_csv(
+        output_dir / f"{timestamp}_gradient_pairwise.csv", index=False
     )
 
 def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[pd.DataFrame]:
@@ -383,6 +335,7 @@ def main(cfg: DictConfig) -> None:
     # gpu inference
     agent: AbstractAgent = instantiate(cfg.agent)
     agent.initialize()
+    gradient_config = cfg.get("gradient_sensitivity", {})
 
     # Extract scenes based on scene-loader to know which tokens to distribute across workers
     scene_filter = instantiate(cfg.train_test_split.scene_filter)
@@ -393,6 +346,37 @@ def main(cfg: DictConfig) -> None:
         scene_filter=scene_filter,
         sensor_config=agent.get_sensor_config(),
     )
+    sample_count = gradient_config.get("scene_count")
+    if gradient_config.get("enabled", False) and sample_count is not None:
+        sample_count = int(sample_count)
+        available_tokens = sorted(scene_loader_inference.tokens)
+        if sample_count <= 0:
+            raise ValueError("gradient_sensitivity.scene_count must be positive")
+        if sample_count > len(available_tokens):
+            raise ValueError(
+                f"Requested {sample_count} scenes, but only {len(available_tokens)} are available"
+            )
+        random_generator = np.random.default_rng(
+            int(gradient_config.get("sample_seed", 0))
+        )
+        sampled_tokens = sorted(
+            random_generator.choice(available_tokens, sample_count, replace=False).tolist()
+        )
+        sampled_token_set = set(sampled_tokens)
+        scene_loader_inference.scene_frames_dicts = {
+            token: scene_frames
+            for token, scene_frames in scene_loader_inference.scene_frames_dicts.items()
+            if token in sampled_token_set
+        }
+        manifest_path = Path(cfg.output_dir) / f"{timestamp}_sampled_tokens.txt"
+        manifest_path.write_text("\n".join(sampled_tokens) + "\n", encoding="utf-8")
+        logger.info(
+            "Sampled %d of %d scenes with seed %s; manifest: %s",
+            sample_count,
+            len(available_tokens),
+            gradient_config.get("sample_seed", 0),
+            manifest_path,
+        )
     dataset = Dataset(
         scene_loader=scene_loader_inference,
         feature_builders=agent.get_feature_builders(),
@@ -403,7 +387,6 @@ def main(cfg: DictConfig) -> None:
     )
     dataloader = DataLoader(dataset, **cfg.dataloader.params, shuffle=False)
     trainer = pl.Trainer(**cfg.trainer.params)
-    gradient_config = cfg.get("gradient_sensitivity", {})
     predictions = trainer.predict(
         AgentLightningModule(
             agent=agent,
