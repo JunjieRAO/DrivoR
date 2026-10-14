@@ -116,8 +116,7 @@ def _agent_loss(
     return ce_loss, l1_loss
 
 def three_to_two_classes(x):
-    x[x == 0.5] = 0.0
-    return x
+    return torch.where(x == 0.5, torch.zeros_like(x), x)
 
 class DrivoRLoss(torch.nn.Module):
 
@@ -133,6 +132,13 @@ class DrivoRLoss(torch.nn.Module):
                         agent_class_weight: float = 1.0,
                         agent_box_weight: float = 1.0,
                         bev_semantic_weight: float = 1.0,
+                        dac_weight: float = 0.0,
+                        collision_weight: float = 0.0,
+                        dac_margin: float = 0.2,
+                        collision_margin: float = 0.2,
+                        safety_worst_weight: float = 1.0,
+                        sdf_bounds=(-64.0, -64.0, 96.0, 64.0),
+                        sdf_resolution: float = 0.5,
                         **kwargs):
         super().__init__()
 
@@ -147,6 +153,13 @@ class DrivoRLoss(torch.nn.Module):
         self.agent_class_weight = agent_class_weight
         self.agent_box_weight = agent_box_weight
         self.bev_semantic_weight = bev_semantic_weight
+        self.dac_weight = dac_weight
+        self.collision_weight = collision_weight
+        self.dac_margin = dac_margin
+        self.collision_margin = collision_margin
+        self.safety_worst_weight = safety_worst_weight
+        self.sdf_bounds = tuple(sdf_bounds)
+        self.sdf_resolution = sdf_resolution
 
 
     def score_loss(self, pred_logit, pred_logit2, agents_state, pred_area_logits, target_scores, gt_states, gt_valid,
@@ -245,8 +258,18 @@ class DrivoRLoss(torch.nn.Module):
         proposal_list = pred["proposal_list"]
         target_trajectory = targets["trajectory"]
 
-        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas = scoring_function(
-            targets, proposals, test=False)
+        score_result = scoring_function(targets, proposals, test=False)
+        final_scores, best_scores, target_scores, gt_states, gt_valid, gt_ego_areas = score_result[:6]
+        dac_loss = collision_loss = proposals.sum() * 0.0
+        if self.dac_weight > 0 or self.collision_weight > 0:
+            from .safety_loss import safety_losses
+            if len(score_result) != 7:
+                raise ValueError("Safety losses require GT distance-field and obstacle targets")
+            with torch.autocast(device_type=proposals.device.type, enabled=False):
+                dac_loss, collision_loss = safety_losses(
+                    proposals, score_result[6], self.dac_margin, self.collision_margin,
+                    self.safety_worst_weight, self.dac_weight > 0, self.collision_weight > 0,
+                )
 
         ########
         if "trajectory_long" in targets.keys():
@@ -314,6 +337,8 @@ class DrivoRLoss(torch.nn.Module):
                 + self.agent_class_weight * agent_class_loss
                 + self.agent_box_weight * agent_box_loss
                 + self.bev_semantic_weight * bev_semantic_loss
+                + self.dac_weight * dac_loss
+                + self.collision_weight * collision_loss
 
         )
 
@@ -327,6 +352,8 @@ class DrivoRLoss(torch.nn.Module):
         loss_dict = {
             "loss": loss,
             "trajectory_loss": trajectory_loss,
+            "dac_geometry_loss": dac_loss,
+            "collision_geometry_loss": collision_loss,
             # 'sub_score_loss': sub_score_loss,
             "da_loss": da_loss,
             "ttc_loss": ttc_loss,

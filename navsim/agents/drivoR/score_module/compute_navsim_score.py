@@ -22,11 +22,12 @@ scorer = PDMScorer(proposal_sampling, config)
 
 def get_scores(args):
 
-    return [get_sub_score(a["token"],a["poses"],a["test"]) for a in args]
+    return [get_sub_score(a["token"], a["poses"], a["test"], a.get("safety_config")) for a in args]
 
 
-def get_sub_score( metric_cache,poses,test):
+def get_sub_score(metric_cache, poses, test, safety_config=None):
 
+    cache_path = metric_cache
     with lzma.open(metric_cache, "rb") as f:
         metric_cache = pickle.load(f)
 
@@ -113,4 +114,8 @@ def get_sub_score( metric_cache,poses,test):
 
         key_agent_corners=key_agent_corners.dot(mat)
 
-    return scores,key_agent_corners,key_agent_labels,ego_areas
+    result = (scores, key_agent_corners, key_agent_labels, ego_areas)
+    if safety_config is not None and not test:
+        from .safety_targets import cached_safety_targets
+        result += (cached_safety_targets(cache_path, metric_cache, safety_config),)
+    return result

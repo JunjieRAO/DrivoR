@@ -121,6 +121,9 @@ python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training.py  \
 ```
 
 # Evaluation
+For NAV2 safety training with pretrained DINOv2 and fresh remaining modules, see
+[Safety training](docs/safety_training.md) and run `bash scripts/nav2_train_safety.sh`.
+
 Cache train metrics for pdm score calculation:
 ```bash
 bash scripts/evaluation/run_metric_caching.sh

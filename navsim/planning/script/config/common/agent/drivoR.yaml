@@ -110,9 +110,20 @@ loss:
   agent_box_weight: 0.1
   bev_semantic_weight: 1.0
   div_weight: 0.0
+  dac_weight: 0.0
+  collision_weight: 0.0
+  dac_margin: 0.2
+  collision_margin: 0.2
+  safety_worst_weight: 1.0
+  sdf_bounds: [-64.0, -64.0, 96.0, 64.0]
+  sdf_resolution: 0.5
 
 
 checkpoint_path: ''
+checkpoint_perception_only: false
+train_metric_cache_path: null
+perception_lr_scale: 1.0
+use_ray: true
 lr_args: 
   name: AdamW
   base_lr: 5e-4

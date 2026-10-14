@@ -71,15 +71,25 @@ class DrivoRAgent(AbstractAgent):
             scheduler_args: dict = None,
             batch_size: int = 64,
             num_gpus: int = 1,
+                train_metric_cache_path: str = None,
+                perception_lr_scale: float = 1.0,
+                use_ray: bool = True,
+                checkpoint_perception_only: bool = False,
     ):
         super().__init__()
         self._config = config
         self._lr_args = lr_args
         self._checkpoint_path = checkpoint_path
+        self._checkpoint_perception_only = checkpoint_perception_only
         self.progress_bar = progress_bar
         self.scheduler_args = scheduler_args
         self.batch_size = batch_size
         self.num_gpus = num_gpus
+        self.loss = loss
+        self.train_metric_cache_path = train_metric_cache_path
+        self.perception_lr_scale = perception_lr_scale
+        self.ray = use_ray
+        self._score_backend_initialized = False
 
 
         cache_data=False
@@ -87,49 +97,28 @@ class DrivoRAgent(AbstractAgent):
         if not cache_data:
             self._drivor_model = DrivoRModel(config)
 
-        if not cache_data and self._checkpoint_path == "": # only for training
-            self.bce_logit_loss = nn.BCEWithLogitsLoss()
-            self.b2d = config.b2d
-
-            self.ray=True
-
-            if self.ray:
-                from navsim.planning.utils.multithreading.worker_ray_no_torch import RayDistributedNoTorch
-                from nuplan.planning.utils.multithreading.worker_utils import worker_map
-                self.worker = RayDistributedNoTorch(threads_per_node=8)
-                self.worker_map=worker_map
-
-
-            from .score_module.compute_navsim_score import get_scores
-
-            metric_cache = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_cache"))
-            try:
-                # add synthetic metric_cache
-                metric_cache_synthetic_0 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-0"))
-                metric_cache_synthetic_1 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-1"))
-                metric_cache_synthetic_2 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-2"))
-                metric_cache_synthetic_3 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-3"))
-                metric_cache_synthetic_4 = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/train_metric_synthetic_reaction_pdm_v1.0-4"))
-
-                self.train_metric_cache_paths_synthetic = metric_cache_synthetic_0.metric_cache_paths
-                self.train_metric_cache_paths_synthetic.update(metric_cache_synthetic_0.metric_cache_paths)
-                self.train_metric_cache_paths_synthetic.update(metric_cache_synthetic_1.metric_cache_paths)
-                self.train_metric_cache_paths_synthetic.update(metric_cache_synthetic_2.metric_cache_paths)
-                self.train_metric_cache_paths_synthetic.update(metric_cache_synthetic_3.metric_cache_paths)
-                self.train_metric_cache_paths_synthetic.update(metric_cache_synthetic_4.metric_cache_paths)
-
-                self.test_metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic
-            except:
-                self.test_metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic = None
-
-            self.test_metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic
-            self.train_metric_cache_paths = metric_cache.metric_cache_paths
-            self.test_metric_cache_paths = metric_cache.metric_cache_paths
-
-            self.get_scores = get_scores
-
-            self.loss = loss
-            
+    def _initialize_score_backend(self):
+        if self._score_backend_initialized:
+            return
+        if self.ray:
+            from navsim.planning.utils.multithreading.worker_ray_no_torch import RayDistributedNoTorch
+            from nuplan.planning.utils.multithreading.worker_utils import worker_map
+            self.worker = RayDistributedNoTorch(threads_per_node=8)
+            self.worker_map = worker_map
+        from .score_module.compute_navsim_score import get_scores
+        cache_path = self.train_metric_cache_path or str(Path(os.environ["NAVSIM_EXP_ROOT"]) / "train_metric_cache")
+        metric_cache = MetricCacheLoader(Path(cache_path))
+        self.train_metric_cache_paths = metric_cache.metric_cache_paths
+        self.test_metric_cache_paths = self.train_metric_cache_paths
+        synthetic_paths = {}
+        for index in range(5):
+            path = Path(os.environ["NAVSIM_EXP_ROOT"]) / f"train_metric_synthetic_reaction_pdm_v1.0-{index}"
+            if path.exists():
+                synthetic_paths.update(MetricCacheLoader(path).metric_cache_paths)
+        self.train_metric_cache_paths_synthetic = synthetic_paths
+        self.test_metric_cache_paths_synthetic = synthetic_paths
+        self.get_scores = get_scores
+        self._score_backend_initialized = True
 
 
     def name(self) -> str:
@@ -139,13 +128,22 @@ class DrivoRAgent(AbstractAgent):
     def initialize(self) -> None:
         """Inherited, see superclass."""
 
-        if self._checkpoint_path != "":
-            if torch.cuda.is_available():
-                state_dict: Dict[str, Any] = torch.load(self._checkpoint_path)["state_dict"]
-            else:
-                state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
-                    "state_dict"]
-            self.load_state_dict({k.replace("agent._drivor_model", "_drivor_model"): v for k, v in state_dict.items()})
+        if self._checkpoint_path:
+            checkpoint = torch.load(self._checkpoint_path, map_location="cpu", weights_only=False)
+            state_dict = checkpoint.get("state_dict", checkpoint)
+            state_dict = {key.replace("agent._drivor_model", "_drivor_model"): value
+                          for key, value in state_dict.items()}
+            if self._checkpoint_perception_only:
+                current_state = self.state_dict()
+                perception_keys = {key for key in current_state
+                                   if key.startswith(("_drivor_model.image_backbone.", "_drivor_model.lidar_backbone."))
+                                   or key in ("_drivor_model.scene_embeds", "_drivor_model.lidar_scene_embeds")}
+                missing = perception_keys - state_dict.keys()
+                if not perception_keys or missing:
+                    raise ValueError(f"Incomplete perception checkpoint; missing keys: {sorted(missing)}")
+                current_state.update({key: state_dict[key] for key in perception_keys})
+                state_dict = current_state
+            self.load_state_dict(state_dict)
 
     def get_sensor_config(self) :
         """Inherited, see superclass."""
@@ -182,6 +180,7 @@ class DrivoRAgent(AbstractAgent):
         return self._drivor_model(features)
 
     def compute_score(self, targets, proposals, test=True):
+        self._initialize_score_backend()
         if self.training:
             metric_cache_paths = self.train_metric_cache_paths
             metric_cache_paths_synthetic = self.train_metric_cache_paths_synthetic
@@ -191,13 +190,21 @@ class DrivoRAgent(AbstractAgent):
 
         target_trajectory = targets["trajectory"]
         proposals=proposals.detach()
+        safety_config = None
+        if not test and self.loss is not None and (self.loss.dac_weight > 0 or self.loss.collision_weight > 0):
+            safety_config = {
+                "bounds": self.loss.sdf_bounds,
+                "resolution": self.loss.sdf_resolution,
+                "time_horizon": self._config.trajectory_sampling.time_horizon,
+            }
 
         
         data_points = [
             {
                 "token": metric_cache_paths[token] if token in metric_cache_paths else metric_cache_paths_synthetic[token],
                 "poses": poses,
-                "test": test
+                "test": test,
+                "safety_config": safety_config,
             }
             for token, poses in zip(targets["token"], proposals.cpu().numpy())
         ]
@@ -224,7 +231,21 @@ class DrivoRAgent(AbstractAgent):
 
             all_ego_areas = torch.BoolTensor(np.stack([res[3] for res in all_res])).to(proposals.device)
 
-            return final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas
+            result = (final_scores, best_scores, target_scores, key_agent_corners, key_agent_labels, all_ego_areas)
+            if safety_config is not None:
+                safety_targets = [res[4] for res in all_res]
+                max_actors = max(item["obstacle_valid"].shape[1] for item in safety_targets)
+                padded_corners, padded_valid = [], []
+                for item in safety_targets:
+                    count = item["obstacle_valid"].shape[1]
+                    padded_corners.append(np.pad(item["obstacle_corners"], ((0, 0), (0, max_actors - count), (0, 0), (0, 0))))
+                    padded_valid.append(np.pad(item["obstacle_valid"], ((0, 0), (0, max_actors - count))))
+                batch_targets = {key: torch.as_tensor(np.stack([item[key] for item in safety_targets]), device=proposals.device)
+                                 for key in ("drivable_sdf", "sdf_bounds", "vehicle")}
+                batch_targets["obstacle_corners"] = torch.as_tensor(np.stack(padded_corners), device=proposals.device)
+                batch_targets["obstacle_valid"] = torch.as_tensor(np.stack(padded_valid), device=proposals.device)
+                result += (batch_targets,)
+            return result
 
     def compute_loss(
             self,
@@ -237,12 +258,21 @@ class DrivoRAgent(AbstractAgent):
     def get_optimizers(self):
 
         global_batchsize = self.batch_size * self.num_gpus
+        lr = self._lr_args["base_lr"] * math.sqrt(global_batchsize / self._lr_args["base_batch_size"])
+        perception, planning = [], []
+        for name, parameter in self._drivor_model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if name.startswith(("image_backbone.", "lidar_backbone.")) or name in ("scene_embeds", "lidar_scene_embeds"):
+                perception.append(parameter)
+            else:
+                planning.append(parameter)
+        parameters = [{"params": planning, "lr": lr},
+                      {"params": perception, "lr": lr * self.perception_lr_scale}]
         if self._lr_args["name"] == "Adam":
-            lr = self._lr_args["base_lr"] * math.sqrt(global_batchsize / self._lr_args["base_batch_size"])
-            optimizer = torch.optim.Adam(self._drivor_model.parameters(), lr=lr)
+            optimizer = torch.optim.Adam(parameters, lr=lr)
         elif self._lr_args["name"] == "AdamW":
-            lr = self._lr_args["base_lr"] * math.sqrt(global_batchsize / self._lr_args["base_batch_size"])
-            optimizer = torch.optim.AdamW(self._drivor_model.parameters(), lr=lr)
+            optimizer = torch.optim.AdamW(parameters, lr=lr)
         else:
             raise NotImplementedError
 
