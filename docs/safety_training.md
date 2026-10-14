@@ -4,8 +4,9 @@ The objective keeps the original trajectory imitation and score losses and adds
 `dac_weight * dac_geometry_loss + collision_weight * collision_geometry_loss`.
 Both new terms supervise every candidate in the final refinement layer, before
 the discrete scorer selection. Default agent configuration disables both terms;
-the launcher enables them with initial weights 1.0 and 1.0. Tune these weights
-against real DAC/NC, progress, comfort and candidate diversity, not loss alone.
+the launcher also defaults to B0 with both weights zero. Enable them explicitly
+for B2; the example below uses weights 1.0 and 1.0. Tune these weights against real
+DAC/NC, progress, comfort and candidate diversity, not loss alone.
 
 Each safety term averages the per-trajectory penalties over all candidates
 (64 by default) and the batch. Safe candidates contribute zero but remain in the
@@ -50,8 +51,9 @@ inference inputs and architecture are unchanged.
 ## Launch
 
 The launcher follows `scorer-grad`'s `scripts/nav1_train_frozen_backbones.sh` path
-and GPU conventions. Its default is experiment B2: pretrained DINOv2 plus original
-losses, differentiable DAC and collision losses. It does not load a DrivoR
+and GPU conventions. Its default is experiment B0: pretrained DINOv2 plus original
+trajectory imitation and score losses, without the additional geometry losses.
+It does not load a DrivoR
 checkpoint (`agent.checkpoint_path=''`) or resume an old training run.
 Original DINOv2 weights are loaded independently from
 `weights/vit_small_patch14_reg4_dinov2.lvd142m/model.safetensors` and stay frozen.
@@ -60,6 +62,10 @@ trajectory heads, position embedding, scorer attention and score heads start fro
 new initialization. All trainable parameters use the same default learning rate
 (`PERCEPTION_LR_SCALE=1.0`). The base learning rate is 0.0002 (scaled by global batch
 size), and training runs for 10 epochs. No auxiliary semantic map head is added.
+The default is four GPUs with batch size 16 per GPU, seed 2, prefetch factor 1 and
+16 DataLoader workers per rank. Gradient clipping is disabled (`gradient_clip_val=0`)
+and persistent workers use the DataLoader default (`false`), matching the README's
+NAV2 recipe. This changes launcher parameters only, not installed library versions.
 
 ```bash
 DRY_RUN=1 bash scripts/nav2_train_safety.sh
@@ -69,8 +75,8 @@ tail -f exp/logs/xx.log
 BACKGROUND=0 GPU_IDS=0 BATCH_SIZE=2 DATALOADER_WORKERS=2 USE_RAY=false \
   bash scripts/nav2_train_safety.sh trainer.params.fast_dev_run=true
 
-# B0 control: identical initialization and launcher settings, original losses only
-DAC_WEIGHT=0 COLLISION_WEIGHT=0 EXPERIMENT_NAME=nav2_safety_b0 \
+# B2: same initialization and training settings, with additional safety losses
+DAC_WEIGHT=1 COLLISION_WEIGHT=1 EXPERIMENT_NAME=nav2_safety_b2 \
   bash scripts/nav2_train_safety.sh
 ```
 
@@ -91,9 +97,10 @@ is not required. Override `DATA_ROOT`,
 `COLLISION_WEIGHT`, `DAC_MARGIN`, `COLLISION_MARGIN` or `SDF_RESOLUTION` as needed.
 Additional arguments are forwarded to Hydra. The script sets `DRIVOR_NO_RESUME=1`
 and `train_ckpt_path=null` to prevent accidental restoration of an old experiment.
-New Lightning checkpoints are saved under `exp/ke/nav2_safety_b2/...`, not `weights/`.
+New Lightning checkpoints are saved under `exp/ke/nav2_safety_b0/...` by default,
+not `weights/`. `EXPERIMENT_NAME` selects a separate output directory for B2.
 Explicit Hydra overrides can load or resume a checkpoint, but that is no longer
-the fresh-initialization B2 experiment. Compare B0 and B2 using the same seeds,
+the fresh-initialization experiment. Compare B0 and B2 using the same seeds,
 data and evaluation protocol; the published DrivoR score is an additional reference.
 
 This is the NAV2 model training recipe in DrivoR's NAV1-based runtime, as in its

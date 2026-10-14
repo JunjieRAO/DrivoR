@@ -68,6 +68,38 @@ class TrainingLauncherTest(unittest.TestCase):
         self.assertEqual(command[-3:], ["--cfg", "job", "--resolve"])
         self.assertNotIn(">", command)
 
+    def test_readme_nav2_training_defaults(self):
+        command = self.preview({key: "" for key in (
+            "GPU_IDS", "DATALOADER_WORKERS", "BATCH_SIZE", "MAX_EPOCHS", "BASE_LR",
+            "PERCEPTION_LR_SCALE", "DAC_WEIGHT", "COLLISION_WEIGHT", "SEED",
+        )})
+        expected = {
+            "train_test_split": "navtrain",
+            "cache_path": "null",
+            "use_cache_without_dataset": "false",
+            "train_ckpt_path": "null",
+            "trainer.params.max_epochs": "10",
+            "+trainer.params.devices": "4",
+            "trainer.params.strategy": "ddp",
+            "trainer.params.gradient_clip_val": "0.0",
+            "dataloader.params.batch_size": "16",
+            "dataloader.params.num_workers": "16",
+            "dataloader.params.prefetch_factor": "1",
+            "agent.checkpoint_path": "''",
+            "agent.lr_args.name": "AdamW",
+            "agent.lr_args.base_lr": "0.0002",
+            "agent.num_gpus": "4",
+            "agent.perception_lr_scale": "1.0",
+            "agent.loss.prev_weight": "0.0",
+            "agent.loss.dac_weight": "0.0",
+            "agent.loss.collision_weight": "0.0",
+            "seed": "2",
+        }
+        for key, value in expected.items():
+            with self.subTest(parameter=key):
+                self.assertIn(f"{key}={value}", command)
+        self.assertFalse(any("persistent_workers=" in argument for argument in command))
+
 
 if __name__ == "__main__":
     unittest.main()

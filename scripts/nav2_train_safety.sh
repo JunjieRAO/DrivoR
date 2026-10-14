@@ -6,7 +6,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
 DATA_ROOT="${DATA_ROOT:-/mnt/workspace/hru4sgh/NAVSIM/dataset}"
 TRAIN_METRIC_CACHE_PATH="${TRAIN_METRIC_CACHE_PATH:-$REPO_ROOT/dataset/train_metric_cache_navtrain}"
 GPU_IDS="${GPU_IDS:-0,1,2,3}"
-DATALOADER_WORKERS="${DATALOADER_WORKERS:-8}"
+DATALOADER_WORKERS="${DATALOADER_WORKERS:-16}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
 MAX_EPOCHS="${MAX_EPOCHS:-10}"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-nav2_safety_b0}"
@@ -56,11 +56,10 @@ COMMAND=("$PYTHON_BIN" "$NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training.
   "trainer.params.max_epochs=$MAX_EPOCHS"
   "+trainer.params.devices=$NUM_GPUS"
   "trainer.params.strategy=$TRAINER_STRATEGY"
-  trainer.params.gradient_clip_val=1.0
+  trainer.params.gradient_clip_val=0.0
   "dataloader.params.batch_size=$BATCH_SIZE"
   "dataloader.params.num_workers=$DATALOADER_WORKERS"
   dataloader.params.prefetch_factor=1
-  +dataloader.params.persistent_workers=true
   "agent.checkpoint_path=''"
   agent.checkpoint_perception_only=false
   "agent.train_metric_cache_path=$TRAIN_METRIC_CACHE_PATH"
@@ -104,7 +103,7 @@ done
 LOG_FILE="${LOG_FILE:-$NAVSIM_EXP_ROOT/logs/${EXPERIMENT_NAME}_$(date +%Y%m%d_%H%M%S).log}"
 
 printf '[INFO] Data: %s\n[INFO] GPUs: %s\n' "$DATA_ROOT" "$GPU_IDS"
-printf '[INFO] B2: pretrained DINOv2 only; no DrivoR checkpoint or automatic resume.\n'
+printf '[INFO] NAV2 training: pretrained DINOv2 only; no DrivoR checkpoint or automatic resume.\n'
 printf '[INFO] LoRA, neck, scene tokens, ego encoder, trajectory generator and scorer start fresh.\n'
 printf '[INFO] Outputs: %s/ke/%s\n' "$NAVSIM_EXP_ROOT" "$EXPERIMENT_NAME"
 if [[ "${DRY_RUN:-0}" == 1 ]]; then
