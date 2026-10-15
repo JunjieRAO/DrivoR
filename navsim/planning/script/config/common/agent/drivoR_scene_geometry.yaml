@@ -1,0 +1,27 @@
+defaults:
+  - drivoR
+  - _self_
+
+config:
+  scene_geometry:
+    mode: gen
+    num_agent_queries: 128
+    num_map_queries: 100
+    map_points: 20
+    num_layers: 2
+    num_heads: 4
+    dropout: 0.1
+    confidence_floor: 0.05
+    roi: [-32.0, -32.0, 64.0, 32.0]
+    max_segment_length: 20.0
+    loss_weight: 1.0
+    warmup_fraction: 0.1
+    cache_mode: strict
+    cache_num_workers: 72
+    cache_worker_threads: 1
+    cache_root: ${oc.env:NAVSIM_DEVKIT_ROOT}/dataset/scene_geometry_v1
+    data_version: navtrain_current_v1
+
+loss:
+  dac_weight: 0.0
+  collision_weight: 0.0

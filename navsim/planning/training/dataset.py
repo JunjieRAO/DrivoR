@@ -103,7 +103,13 @@ class CacheOnlyDataset(torch.utils.data.Dataset):
                 # for builder in feature_builders + target_builders:
                 #     data_dict_path = token_path / (builder.get_unique_name() + ".gz")
                 #     found_caches.append(data_dict_path.is_file())
-                # if all(found_caches):
+                # External geometry caches are mandatory for the selected split.
+                if not token_path.is_dir():
+                    continue
+                for builder in target_builders:
+                    if hasattr(builder, "load_cached"):
+                        if not builder.cache_path(log_path.name, token_path.name).is_file():
+                            raise FileNotFoundError(builder.cache_path(log_path.name, token_path.name))
                 valid_cache_paths[token_path.name] = token_path
 
         return valid_cache_paths
@@ -125,8 +131,11 @@ class CacheOnlyDataset(torch.utils.data.Dataset):
 
         targets: Dict[str, torch.Tensor] = {}
         for builder in self._target_builders:
-            data_dict_path = token_path / (builder.get_unique_name() + ".gz")
-            data_dict = load_feature_target_from_pickle(data_dict_path)
+            if hasattr(builder, "load_cached"):
+                data_dict = builder.load_cached(token_path.parent.name, token)
+            else:
+                data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+                data_dict = load_feature_target_from_pickle(data_dict_path)
             targets.update(data_dict)
 
         return (features, targets)
@@ -177,7 +186,9 @@ class Dataset(torch.utils.data.Dataset):
                 for token_path in log_path.iterdir():
                     found_caches: List[bool] = []
                     for builder in feature_builders + target_builders:
-                        data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+                        data_dict_path = (builder.cache_path(log_path.name, token_path.name)
+                                          if hasattr(builder, "load_cached") else
+                                          token_path / (builder.get_unique_name() + ".gz"))
                         found_caches.append(data_dict_path.is_file())
                     if all(found_caches):
                         valid_cache_paths[token_path.name] = token_path
@@ -203,9 +214,15 @@ class Dataset(torch.utils.data.Dataset):
             dump_feature_target_to_pickle(data_dict_path, data_dict)
 
         for builder in self._target_builders:
-            data_dict_path = token_path / (builder.get_unique_name() + ".gz")
-            data_dict = builder.compute_targets(scene)
-            dump_feature_target_to_pickle(data_dict_path, data_dict)
+            if hasattr(builder, "cache_scene"):
+                if builder.cfg.cache_mode == "strict":
+                    builder.load_cached(metadata.log_name, metadata.initial_token)
+                else:
+                    builder.cache_scene(scene)
+            else:
+                data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+                data_dict = builder.compute_targets(scene)
+                dump_feature_target_to_pickle(data_dict_path, data_dict)
 
         self._valid_cache_paths[token] = token_path
 
@@ -226,8 +243,11 @@ class Dataset(torch.utils.data.Dataset):
 
         targets: Dict[str, torch.Tensor] = {}
         for builder in self._target_builders:
-            data_dict_path = token_path / (builder.get_unique_name() + ".gz")
-            data_dict = load_feature_target_from_pickle(data_dict_path)
+            if hasattr(builder, "load_cached"):
+                data_dict = builder.load_cached(token_path.parent.name, token)
+            else:
+                data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+                data_dict = load_feature_target_from_pickle(data_dict_path)
             targets.update(data_dict)
 
         return (features, targets)

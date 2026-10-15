@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from .score_module.scorer import Scorer
+from .scene_geometry.geometry_encoder import geometry_mode, SceneGeometryEncoder, GeometryAdapter
 from .transformer_decoder import TransformerDecoder, TransformerDecoderScorer
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
@@ -102,6 +103,16 @@ class DrivoRModel(nn.Module):
         self.scorer = Scorer(config)
 
         self.b2d=config.b2d
+        self.geometry_mode = geometry_mode(config)
+        # Construct after ALL original modules; common initialization stays seed-identical.
+        if self.geometry_mode != "off":
+            with torch.random.fork_rng(devices=[]):
+                self.scene_geometry = SceneGeometryEncoder(
+                    config, (self.num_cams + self.num_lidar) * config.num_scene_tokens)
+                if self.geometry_mode == "gen":
+                    for layer in self.trajectory_decoder.layers:
+                        layer.geometry_adapter = GeometryAdapter(config)
+
 
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -156,7 +167,9 @@ class DrivoRModel(nn.Module):
         log.debug(f"Proposals initial - {proposals.shape}")
 
         # decode the trajectories at each step of the decoder
-        token_list = self.trajectory_decoder(traj_tokens, scene_features)
+        geometry = self.scene_geometry(scene_features) if self.geometry_mode != "off" else None
+        token_list = self.trajectory_decoder(traj_tokens, scene_features,
+                                             geometry if self.geometry_mode == "gen" else None)
         log.debug(f"Trajectory decoder - {len(token_list)}")
         for i in range(self._config.ref_num):
             tokens = token_list[i]
@@ -168,6 +181,8 @@ class DrivoRModel(nn.Module):
         
 
         output={}
+        if geometry is not None:
+            output["scene_geometry"] = geometry
         output["proposals"] = proposals
         output["proposal_list"] = proposal_list
 

@@ -93,7 +93,7 @@ class Block(torch.nn.Module):
 
     def forward(self, 
                 x: torch.Tensor,
-                x_cross: torch.Tensor) -> torch.Tensor:
+                x_cross: torch.Tensor, geometry=None) -> torch.Tensor:
 
         x = x + self.self_attn_drop_path(
                         self.self_attn_ls(
@@ -105,6 +105,9 @@ class Block(torch.nn.Module):
                     self.cross_attn(
                         self.cross_attn_norm_q(x), 
                         self.cross_attn_norm_kv(x_cross))))
+
+        if geometry is not None:
+            x = self.geometry_adapter(x, geometry)
 
         x = x + self.mlp_drop_path(
                         self.mlp_ls(
@@ -136,11 +139,11 @@ class TransformerDecoder(torch.nn.Module):
         self.return_intermediate = True
 
 
-    def forward(self, x, x_cross):
+    def forward(self, x, x_cross, geometry=None):
         
         intermediate = []
         for _, layer in enumerate(self.layers):
-            x = layer(x, x_cross)
+            x = layer(x, x_cross, geometry)
             if self.return_intermediate:
                 intermediate.append(x)
 
@@ -170,11 +173,11 @@ class TransformerDecoderScorer(torch.nn.Module):
         self.return_intermediate = False
 
 
-    def forward(self, x, x_cross):
+    def forward(self, x, x_cross, geometry=None):
         
         intermediate = []
         for _, layer in enumerate(self.layers):
-            x = layer(x, x_cross)
+            x = layer(x, x_cross, geometry)
             if self.return_intermediate:
                 intermediate.append(x)
 

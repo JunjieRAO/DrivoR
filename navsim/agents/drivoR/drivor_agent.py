@@ -171,7 +171,11 @@ class DrivoRAgent(AbstractAgent):
         )
     
     def get_target_builders(self) :
-        return [DrivoRTargetBuilder(config=self._config)]
+        builders = [DrivoRTargetBuilder(config=self._config)]
+        if self._drivor_model.geometry_mode != "off":
+            from .scene_geometry.target_builder import SceneGeometryTargetBuilder
+            builders.append(SceneGeometryTargetBuilder(self._config))
+        return builders
 
     def get_feature_builders(self) :
         return [DrivoRFeatureBuilder(config=self._config)]
@@ -253,7 +257,29 @@ class DrivoRAgent(AbstractAgent):
             targets: Dict[str, torch.Tensor],
             pred: Dict[str, torch.Tensor],
     ) -> Dict:
-        return self.loss(targets, pred, self._config, self.compute_score)
+        losses = self.loss(targets, pred, self._config, self.compute_score)
+        if "scene_geometry" in pred:
+            geometry = self.compute_geometry_metrics(targets, pred)
+            weight = self._config.scene_geometry.loss_weight * getattr(self, "geometry_ramp", 0.0)
+            losses.update(geometry)
+            losses["geometry/weight"] = losses["loss"].new_tensor(weight)
+            losses["loss"] = losses["loss"] + weight * geometry["geometry/loss"]
+        return losses
+
+    def set_geometry_progress(self, global_step, total_steps):
+        cfg = self._config.get("scene_geometry", {})
+        warmup = max(1, int(total_steps * cfg.get("warmup_fraction", 0.1)))
+        self.geometry_ramp = min(1.0, global_step / warmup)
+
+    def compute_geometry_metrics(self, targets, predictions):
+        if "scene_geometry" not in predictions:
+            return {}
+        from .scene_geometry.geometry_loss import geometry_loss
+        result = geometry_loss(predictions["scene_geometry"], targets)
+        for kind in ("agent", "map"):
+            result[f"geometry/{kind}_overflow"] = targets[f"sg_{kind}_overflow"].float().mean()
+            result[f"geometry/{kind}_available"] = targets[f"sg_{kind}_available"].float().mean()
+        return result
 
     def get_optimizers(self):
 

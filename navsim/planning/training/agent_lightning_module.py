@@ -37,6 +37,8 @@ class AgentLightningModule(pl.LightningModule):
         """
         features, targets = batch
 
+        if logging_prefix == "train" and hasattr(self.agent, "set_geometry_progress"):
+            self.agent.set_geometry_progress(self.global_step, self.trainer.estimated_stepping_batches)
         prediction = self.agent.forward(features)
         loss_dict = self.agent.compute_loss(features, targets, prediction)
 
@@ -67,6 +69,10 @@ class AgentLightningModule(pl.LightningModule):
             features, targets = batch
             # score,best_score=self.agent.inference(features, targets)
             predictions = self.agent.forward(features)
+            if hasattr(self.agent, "compute_geometry_metrics"):
+                for key, value in self.agent.compute_geometry_metrics(targets, predictions).items():
+                    self.log("val/" + key, value, on_step=False, on_epoch=True, sync_dist=True,
+                             batch_size=predictions["proposals"].shape[0])
             all_chosen_trajectories = predictions["trajectory"][:,None]
             all_proposed_trajectories = predictions["proposals"]
             final_score, fake_best_score, proposal_scores, l2, trajectoy_scores = self.agent.compute_score(targets, all_chosen_trajectories)
