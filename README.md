@@ -37,6 +37,10 @@ pip install -e .
 
 # Training
 
+NAVSIM-v2 lane keeping (LK) is computed online and supervised by a seventh score
+head. Existing training metric caches can be reused. See
+[Lane keeping](docs/lane_keeping.md) for ranking defaults and legacy checkpoints.
+
 ```bash
 cd drivoR
 conda activate drivoR

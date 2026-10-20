@@ -23,6 +23,7 @@ config:
   ttc: 5.0
   ep: 5.0
   comfort: 2.0
+  lk: 2.0
 
   tf_d_model: 256 # general feature size of the model
   tf_d_ffn: 1024 # hidden size of the heads

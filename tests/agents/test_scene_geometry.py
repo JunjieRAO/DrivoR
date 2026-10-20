@@ -239,7 +239,7 @@ def test_loss_integration_and_custom_validation(monkeypatch):
     assert torch.allclose(losses["loss"], predictions["proposals"].square().mean() + .5 * losses["geometry/loss"])
     def scores(targets, proposals):
         values = proposals.new_ones(proposals.shape[:2])
-        return values.mean(), values.mean(), values, values.mean(), proposals.new_ones((len(proposals), 6))
+        return values.mean(), values.mean(), values, values.mean(), proposals.new_ones((len(proposals), 8))
     monkeypatch.setattr(agent, "compute_score", scores)
     lightning = AgentLightningModule(agent)
     logged = {}
@@ -247,3 +247,4 @@ def test_loss_integration_and_custom_validation(monkeypatch):
     lightning.validation_step((features, targets), 0)
     assert "val/geometry/loss" in logged
     assert "val/score" in logged
+    assert logged["val/lk"].item() == 1.0

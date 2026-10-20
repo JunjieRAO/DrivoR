@@ -106,7 +106,7 @@ class SafetyLossTest(unittest.TestCase):
         from navsim.agents.drivoR.layers.losses.drivor_loss import DrivoRLoss
         proposals = torch.tensor([[[[0., 3., 0.]], [[2.5, 0., 0.]]]], requires_grad=True)
         names = ("no_at_fault_collisions", "drivable_area_compliance", "time_to_collision_within_bound",
-                 "ego_progress", "driving_direction_compliance", "comfort")
+                 "ego_progress", "driving_direction_compliance", "comfort", "lane_keeping")
         prediction = {
             "proposals": proposals, "proposal_list": [proposals],
             "pred_logit": {name: torch.zeros(1, 2, requires_grad=True) for name in names},
@@ -116,7 +116,7 @@ class SafetyLossTest(unittest.TestCase):
             prediction[name] = None
         labels = self.targets()
         def score(targets, trajectories, test):
-            return (torch.ones(1, 2), torch.ones(1), torch.ones(1, 2, 7), None, None, None, labels)
+            return (torch.ones(1, 2), torch.ones(1), torch.ones(1, 2, 8), None, None, None, labels)
         targets = {"trajectory": torch.zeros(1, 1, 3)}
         baseline = DrivoRLoss()(targets, prediction, None, score)
         augmented = DrivoRLoss(dac_weight=1.0, collision_weight=0.5)(targets, prediction, None, score)

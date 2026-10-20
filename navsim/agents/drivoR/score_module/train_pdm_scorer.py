@@ -39,6 +39,7 @@ class PDMScorerConfig:
     ttc_weight: float = 5.0
     comfortable_weight: float = 2.0
     driving_direction_weight: float = 0.0
+    lane_keeping_weight: float = 2.0
 
     # thresholds
     driving_direction_horizon: float = 1.0  # [s] (driving direction)
@@ -46,6 +47,8 @@ class PDMScorerConfig:
     driving_direction_violation_threshold: float = 6.0  # [m] (driving direction)
     stopped_speed_threshold: float = 5e-03  # [m/s] (ttc)
     progress_distance_threshold: float = 5.0  # [m] (progress)
+    lane_keeping_deviation_limit: float = 0.5
+    lane_keeping_horizon_window: float = 2.0
 
     @property
     def weighted_metrics_array(self) -> npt.NDArray[np.float64]:
@@ -54,6 +57,7 @@ class PDMScorerConfig:
         weighted_metrics[WeightedMetricIndex.TTC] = self.ttc_weight
         weighted_metrics[WeightedMetricIndex.COMFORTABLE] = self.comfortable_weight
         weighted_metrics[WeightedMetricIndex.DRIVING_DIRECTION] = self.driving_direction_weight
+        weighted_metrics[WeightedMetricIndex.LANE_KEEPING] = self.lane_keeping_weight
         return weighted_metrics
 
 
@@ -153,9 +157,35 @@ class PDMScorer:
         except:
             self._weighted_metrics[WeightedMetricIndex.TTC] = 2.0
         self._calculate_is_comfortable()
+        self._calculate_lane_keeping()
         self.pdm_progress = pdm_progress
 
         return self._aggregate_scores()
+
+    def _calculate_lane_keeping(self) -> None:
+        lane_keeping_scores = np.ones(self._num_proposals, dtype=np.float64)
+        continuous_steps_required = int(np.ceil(
+            self._config.lane_keeping_horizon_window / self.proposal_sampling.interval_length
+        ))
+        centerline = getattr(self._centerline, "linestring", self._centerline)
+
+        for proposal_index in range(self._num_proposals):
+            consecutive_exceeds = 0
+            for time_index in range(self.proposal_sampling.num_poses + 1):
+                ego_position = Point(*self._ego_coords[proposal_index, time_index, BBCoordsIndex.CENTER])
+                if self._drivable_area_map.is_in_layer(ego_position, layer=SemanticMapLayer.INTERSECTION):
+                    continue
+
+                if ego_position.distance(centerline) > self._config.lane_keeping_deviation_limit:
+                    consecutive_exceeds += 1
+                else:
+                    consecutive_exceeds = 0
+
+                if consecutive_exceeds >= continuous_steps_required:
+                    lane_keeping_scores[proposal_index] = 0.0
+                    break
+
+        self._weighted_metrics[WeightedMetricIndex.LANE_KEEPING] = lane_keeping_scores
 
     def _aggregate_scores(self) -> npt.NDArray[np.float64]:
         """

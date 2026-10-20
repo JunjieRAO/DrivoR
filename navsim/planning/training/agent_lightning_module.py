@@ -114,6 +114,8 @@ class AgentLightningModule(pl.LightningModule):
             self.log(f"{logging_prefix}/ttc", time_to_collision_within_bound, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
             comfort=trajectoy_scores[:,4].mean()
             self.log(f"{logging_prefix}/comfort", comfort, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+            lane_keeping = trajectoy_scores[:,6].mean()
+            self.log(f"{logging_prefix}/lk", lane_keeping, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
 
             return final_score
         else:

@@ -18,6 +18,7 @@ from .drivor_features import DrivoRFeatureBuilder
 import sys
 from omegaconf import OmegaConf
 import math
+import warnings
 
 class LitProgressBar(ProgressBar):
 
@@ -143,6 +144,23 @@ class DrivoRAgent(AbstractAgent):
                     raise ValueError(f"Incomplete perception checkpoint; missing keys: {sorted(missing)}")
                 current_state.update({key: state_dict[key] for key in perception_keys})
                 state_dict = current_state
+            else:
+                current_state = self.state_dict()
+                lane_keeping_keys = {
+                    key for key in current_state
+                    if key.startswith("_drivor_model.scorer.pred_score.lane_keeping.")
+                }
+                if lane_keeping_keys and current_state.keys() - state_dict.keys() == lane_keeping_keys:
+                    if self._config.get("lk", 0.0) != 0.0:
+                        raise ValueError(
+                            "Checkpoint has no trained lane-keeping head; set agent.config.lk=0 "
+                            "to load it for fine-tuning or legacy ranking."
+                        )
+                    state_dict.update({key: current_state[key] for key in lane_keeping_keys})
+                    warnings.warn(
+                        "Checkpoint has no lane-keeping head; initialized it from scratch with LK ranking disabled.",
+                        UserWarning, stacklevel=2,
+                    )
             self.load_state_dict(state_dict)
 
     def get_sensor_config(self) :

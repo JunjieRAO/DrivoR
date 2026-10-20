@@ -69,10 +69,12 @@ def get_sub_score(metric_cache, poses, test, safety_config=None):
     ego_progress = scorer._weighted_metrics[WeightedMetricIndex.PROGRESS, :]
     time_to_collision_within_bound = scorer._weighted_metrics[WeightedMetricIndex.TTC, :]
     comfort = scorer._weighted_metrics[WeightedMetricIndex.COMFORTABLE, :]
+    lane_keeping = scorer._weighted_metrics[WeightedMetricIndex.LANE_KEEPING, :]
 
 
     scores=np.stack([no_at_fault_collisions,drivable_area_compliance,
-                     ego_progress,time_to_collision_within_bound,comfort, driving_direction_compliance, final_scores
+                     ego_progress,time_to_collision_within_bound,comfort, driving_direction_compliance,
+                     lane_keeping, final_scores
                      ],axis=-1)#[:,None]
 
     if not test:

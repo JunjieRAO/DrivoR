@@ -55,5 +55,59 @@ class CheckpointInitializationTest(unittest.TestCase):
                 agent.initialize()
 
 
+class LaneKeepingCheckpointTest(unittest.TestCase):
+    def make_model(self):
+        model = ToyModel()
+        model.scorer = nn.ModuleDict({
+            "pred_score": nn.ModuleDict({
+                "comfort": nn.Sequential(nn.Linear(2, 3), nn.ReLU(), nn.Linear(3, 1)),
+                "lane_keeping": nn.Sequential(nn.Linear(2, 3), nn.ReLU(), nn.Linear(3, 1)),
+            }),
+        })
+        return model
+
+    def load(self, model, state, lk):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "weights.pth"
+            torch.save({"state_dict": {f"agent._drivor_model.{key}": value for key, value in state.items()}}, path)
+            with patch("navsim.agents.drivoR.drivor_agent.DrivoRModel", return_value=model):
+                agent = DrivoRAgent({"lk": lk}, {}, checkpoint_path=str(path))
+            agent.initialize()
+        return agent
+
+    def test_new_head_checkpoint_loads_strictly(self):
+        model = self.make_model()
+        saved = {key: value + 5 for key, value in model.state_dict().items()}
+        self.load(model, saved, lk=2.0)
+        for key, value in model.state_dict().items():
+            torch.testing.assert_close(value, saved[key])
+
+    def test_legacy_checkpoint_initializes_only_lk_with_ranking_disabled(self):
+        model = self.make_model()
+        original = {key: value.clone() for key, value in model.state_dict().items()}
+        saved = {key: value + 5 for key, value in original.items()
+                 if not key.startswith("scorer.pred_score.lane_keeping.")}
+        with self.assertWarnsRegex(UserWarning, "LK ranking disabled"):
+            self.load(model, saved, lk=0.0)
+        for key, value in model.state_dict().items():
+            torch.testing.assert_close(value, saved.get(key, original[key]))
+
+    def test_legacy_checkpoint_rejects_untrained_lk_ranking(self):
+        model = self.make_model()
+        saved = {key: value for key, value in model.state_dict().items()
+                 if not key.startswith("scorer.pred_score.lane_keeping.")}
+        with self.assertRaisesRegex(ValueError, "agent.config.lk=0"):
+            self.load(model, saved, lk=2.0)
+
+    def test_partial_lk_or_other_missing_keys_remain_strict(self):
+        for missing in ("scorer.pred_score.lane_keeping.0.weight", "hist_encoding.weight"):
+            with self.subTest(missing=missing):
+                model = self.make_model()
+                saved = dict(model.state_dict())
+                del saved[missing]
+                with self.assertRaises(RuntimeError):
+                    self.load(model, saved, lk=0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

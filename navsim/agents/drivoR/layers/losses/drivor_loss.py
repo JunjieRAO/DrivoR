@@ -195,15 +195,17 @@ class DrivoRLoss(torch.nn.Module):
             pred_logit['ego_progress']
             )
         driving_direction_compliance = pred_logit['driving_direction_compliance']
+        lane_keeping = pred_logit['lane_keeping']
         
 
-        gt_no_at_fault_collisions, gt_drivable_area_compliance, gt_ego_progress, gt_time_to_collision_within_bound, gt_comfort, gt_driving_direction_compliance, _ = torch.split(target_scores, 1, dim=-1)
+        gt_no_at_fault_collisions, gt_drivable_area_compliance, gt_ego_progress, gt_time_to_collision_within_bound, gt_comfort, gt_driving_direction_compliance, gt_lane_keeping, _ = torch.split(target_scores, 1, dim=-1)
         gt_no_at_fault_collisions = gt_no_at_fault_collisions.squeeze(-1)
         gt_drivable_area_compliance = gt_drivable_area_compliance.squeeze(-1)
         gt_ego_progress = gt_ego_progress.squeeze(-1)
         gt_time_to_collision_within_bound = gt_time_to_collision_within_bound.squeeze(-1)
         gt_driving_direction_compliance = gt_driving_direction_compliance.squeeze(-1)
         gt_comfort = gt_comfort.squeeze(-1)
+        gt_lane_keeping = gt_lane_keeping.squeeze(-1)
 
         da_loss = F.binary_cross_entropy_with_logits(drivable_area_compliance, gt_drivable_area_compliance.to(dtype))
 
@@ -232,14 +234,16 @@ class DrivoRLoss(torch.nn.Module):
 
         # imi_loss = F.cross_entropy(imi, l2_distance.sum((-2, -1)).softmax(1))
         comfort_loss = F.binary_cross_entropy_with_logits(comfort, gt_comfort.to(dtype))
+        lk_loss = F.binary_cross_entropy_with_logits(lane_keeping, gt_lane_keeping.to(dtype))
 
-        sub_score_loss = [da_loss, ttc_loss, noc_loss, progress_loss, ddc_loss, comfort_loss]
+        sub_score_loss = [da_loss, ttc_loss, noc_loss, progress_loss, ddc_loss, comfort_loss, lk_loss]
 
         final_score_loss = da_loss*trajectory_pdm_weight['drivable_area_compliance'] + \
                            ttc_loss*trajectory_pdm_weight['time_to_collision_within_bound'] + \
                            noc_loss*trajectory_pdm_weight['no_at_fault_collisions'] + \
                            progress_loss*trajectory_pdm_weight['ego_progress'] + \
-                           ddc_loss*trajectory_pdm_weight['driving_direction_compliance'] + comfort_loss*trajectory_pdm_weight['history_comfort']
+                           ddc_loss*trajectory_pdm_weight['driving_direction_compliance'] + comfort_loss*trajectory_pdm_weight['history_comfort'] + \
+                           lk_loss*trajectory_pdm_weight['lane_keeping']
 
         return sub_score_loss, final_score_loss, pred_ce_loss, pred_l1_loss, pred_area_loss
 
@@ -347,7 +351,7 @@ class DrivoRLoss(torch.nn.Module):
         score = final_scores[np.arange(len(final_scores)), top_proposals].mean()
         best_score = best_scores.mean()
 
-        [da_loss, ttc_loss, noc_loss, progress_loss, ddc_loss, comfort_loss] = sub_score_loss
+        [da_loss, ttc_loss, noc_loss, progress_loss, ddc_loss, comfort_loss, lk_loss] = sub_score_loss
 
         loss_dict = {
             "loss": loss,
@@ -361,6 +365,7 @@ class DrivoRLoss(torch.nn.Module):
             "progress_loss": progress_loss,
             "ddc_loss": ddc_loss,
             "comfort_loss": comfort_loss,
+            "lk_loss": lk_loss,
             'final_score_loss': final_score_loss,
             'pred_ce_loss': pred_ce_loss,
             'pred_l1_loss': pred_l1_loss,

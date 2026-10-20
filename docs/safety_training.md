@@ -104,9 +104,12 @@ the fresh-initialization experiment. Compare B0 and B2 using the same seeds,
 data and evaluation protocol; the published DrivoR score is an additional reference.
 
 This is the NAV2 model training recipe in DrivoR's NAV1-based runtime, as in its
-README. It preserves the existing training scorer and selection weights; it does
-not turn the scorer into the full NAVSIM-v2 EPDMS evaluation protocol. Run official
-NAV2 evaluation in the separate `navsim-v2` checkout.
+README. It preserves the other training metric definitions and selection weights;
+it does not turn the scorer into the full NAVSIM-v2 EPDMS evaluation protocol. The current
+agent additionally supervises a lane-keeping head and includes LK with weight 2.0
+in the training aggregate and default candidate ranking; see
+[Lane keeping](lane_keeping.md) for cache and legacy-checkpoint compatibility.
+Run official NAV2 evaluation in the separate `navsim-v2` checkout.
 
 ```bash
 python -m unittest discover -s tests/agents -p 'test_*.py' -v

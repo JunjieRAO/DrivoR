@@ -208,14 +208,7 @@ class DrivoRModel(nn.Module):
         output["agent_states"]=agent_states
         output["agent_labels"]=agent_labels
 
-        pdm_score = (
-        self._config.noc * pred_logit['no_at_fault_collisions'].sigmoid().log() +
-        self._config.dac * pred_logit['drivable_area_compliance'].sigmoid().log() +
-        self._config.ddc * pred_logit['driving_direction_compliance'].sigmoid().log() +    
-        (self._config.ttc * pred_logit['time_to_collision_within_bound'].sigmoid() +
-        self._config.ep * pred_logit['ego_progress'].sigmoid()  
-        + self._config.comfort * pred_logit['comfort'].sigmoid()).log()
-        )
+        pdm_score = self._compute_pdm_score(pred_logit)
 
         token = torch.argmax(pdm_score, dim=1)
         trajectory = proposals[torch.arange(batch_size), token]
@@ -224,6 +217,19 @@ class DrivoRModel(nn.Module):
         output["pdm_score"] = pdm_score
 
         return output
+
+    def _compute_pdm_score(self, pred_logit):
+        return (
+            self._config.noc * pred_logit['no_at_fault_collisions'].sigmoid().log()
+            + self._config.dac * pred_logit['drivable_area_compliance'].sigmoid().log()
+            + self._config.ddc * pred_logit['driving_direction_compliance'].sigmoid().log()
+            + (
+                self._config.ttc * pred_logit['time_to_collision_within_bound'].sigmoid()
+                + self._config.ep * pred_logit['ego_progress'].sigmoid()
+                + self._config.comfort * pred_logit['comfort'].sigmoid()
+                + getattr(self._config, 'lk', 0.0) * pred_logit['lane_keeping'].sigmoid()
+            ).log()
+        )
 
 
 

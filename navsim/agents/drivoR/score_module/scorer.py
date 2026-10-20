@@ -12,7 +12,6 @@ class Scorer(nn.Module):
         self.b2d=config.b2d
 
         self.proposal_num=config.proposal_num
-        self.score_num = 6
 
         # self.pred_score = MLP(config.tf_d_model, config.tf_d_ffn, self.score_num)
 
@@ -44,11 +43,6 @@ class Scorer(nn.Module):
                 nn.ReLU(),
                 nn.Linear(config.tf_d_ffn, 1),
             ),
-            # 'lane_keeping': nn.Sequential(
-            #     nn.Linear(d_model, d_ffn),
-            #     nn.ReLU(),
-            #     nn.Linear(d_ffn, 1),
-            # ),
             # 'traffic_light_compliance': nn.Sequential(
             #     nn.Linear(config.tf_d_model, config.tf_d_ffn),
             #     nn.ReLU(),
@@ -58,13 +52,19 @@ class Scorer(nn.Module):
                 nn.Linear(config.tf_d_model, config.tf_d_ffn),
                 nn.ReLU(),
                 nn.Linear(config.tf_d_ffn, 1)
-            )
+            ),
+            'lane_keeping': nn.Sequential(
+                nn.Linear(config.tf_d_model, config.tf_d_ffn),
+                nn.ReLU(),
+                nn.Linear(config.tf_d_ffn, 1),
+            ),
         })
 
 
 
 
 
+        self.score_num = len(self.pred_score)
         self.double_score=config.double_score
 
         if self.double_score:
