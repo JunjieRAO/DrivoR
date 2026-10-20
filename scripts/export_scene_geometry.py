@@ -135,7 +135,7 @@ from navsim.planning.training.abstract_feature_target_builder import AbstractFea
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", required=True)
-    parser.add_argument("--mode", choices=["off", "aux", "gen"], default="gen")
+    parser.add_argument("--mode", choices=["off", "aux", "gen", "gen_scorer"], default="gen")
     parser.add_argument("--training-config", help="Hydra config.yaml for non-default architecture")
     args = parser.parse_args()
     export(args.destination, args.mode, args.training_config)

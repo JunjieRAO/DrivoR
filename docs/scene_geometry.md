@@ -9,12 +9,33 @@
 | `off`（SG-BASE） | 无 | 无 | 原有 scene tokens |
 | `aux`（SG-AUX） | 有 | 无 | 原有 scene tokens |
 | `gen`（SG-GEN） | 有 | Agent／地图 tokens | 原有 scene tokens |
+| `gen_scorer`（SG-GEN-SCORER） | 有 | Agent／地图 tokens | 原有 scene tokens + Agent／地图 tokens |
 
-三组均保留最新时刻的四路相机图像、自车状态、DINOv2 + LoRA、动态生成的 64 条轨迹（每条 8 个 waypoint）、原有轨迹损失和 scorer。本次不加入其他交通参与者的速度／未来预测、occupancy 预测头、path-speed 词表或 B2 安全损失。共享场景特征仍可能间接改变 scorer，因此应分别评价候选轨迹的可行覆盖和轨迹选择效果。
+各组均保留最新时刻的四路相机图像、自车状态、DINOv2 + LoRA、动态生成的 64 条轨迹（每条 8 个 waypoint）、原有轨迹损失和 scorer。本次不加入其他交通参与者的速度／未来预测、occupancy 预测头、path-speed 词表或 B2 安全损失。共享场景特征仍可能间接改变 scorer，因此应分别评价候选轨迹的可行覆盖和轨迹选择效果。
 
-默认配置使用 128 个 agent queries、100 个 map queries，每条地图折线包含 20 个点，两层细化模块（特征维度 256、4 个注意力头、FFN 维度 1024）。Agent 输出为归一化 XY、长宽的对数，以及航向角的 sin/cos；地图输出为归一化 XY 折线。Agent 的四个类别和地图的两个类别均采用 sigmoid 分类，所有类别均为负表示背景。生成器读取全部预测 queries，并额外加入一个空 token。置信度经过停止梯度、下限 0.05 截断和取对数后，作为注意力偏置。输入生成器位置编码 MLP 的预测几何经过停止梯度处理，语义 tokens 保留梯度。每个轨迹解码块在原有场景交叉注意力与 FFN 之间加入 agent／地图注意力，残差门控初始值为零。原有 scorer 不直接读取这些新增特征。
+默认配置使用 128 个 agent queries、100 个 map queries，每条地图折线包含 20 个点，两层细化模块（特征维度 256、4 个注意力头、FFN 维度 1024）。Agent 输出为归一化 XY、长宽的对数，以及航向角的 sin/cos；地图输出为归一化 XY 折线。Agent 的四个类别和地图的两个类别均采用 sigmoid 分类，所有类别均为负表示背景。生成器读取全部预测 queries，并额外加入一个空 token。置信度经过停止梯度、下限 0.05 截断和取对数后，作为注意力偏置。输入生成器位置编码 MLP 的预测几何经过停止梯度处理，语义 tokens 保留梯度。每个轨迹解码块在原有场景交叉注意力与 FFN 之间加入 agent／地图注意力，残差门控初始值为零。`off`、`aux`、`gen` 的 scorer 不直接读取这些新增特征。
+
+`gen_scorer` 在每个 scorer 解码块的场景交叉注意力之后、FFN 之前，增加独立的 agent／地图交叉注意力。Query 来自候选轨迹编码，Key/Value 来自共享几何编码器的最后一层预测；生成器和 scorer 的适配器不共享参数。几何坐标与置信度停止梯度，语义 tokens 保留梯度，因此评分损失可更新共享几何表征。保留轨迹输入 scorer 前的 detach，评分损失不会通过候选坐标直接反传到生成器，但联合训练仍会更新共享图像／几何模块。六个评分头、排序系数、64 条候选和几何监督目标均不变。新增 scorer 残差门控初始化为零；在 eval 模式、相同共有权重下，初始输出与 `gen` 一致。
 
 原有模块优先构建，新增模块在独立的随机数状态上下文中初始化，保持各组共有参数的初始权重和外部初始化随机数状态一致。`off` 不创建额外参数，仍支持严格加载旧 checkpoint。将旧规划 checkpoint 严格加载到 `gen` 会失败，除非显式选择现有的“仅初始化感知部分”功能。本对照实验仅从 DINO 预训练权重开始初始化。
+
+
+### GEN-SCORER 的训练与评测
+
+默认仍为 `gen`，显式设置 `GEOMETRY_MODE=gen_scorer` 开启新连接。该命令沿用现有联合训练流程和 Python 默认值，不是“冻结生成器只训练 scorer”的实验，也不会自动加载之前的 GEN checkpoint。原有 geometry 缓存可直接复用，无需重建。
+
+旧 `gen` checkpoint 继续在 `gen` 模式严格加载；它缺少新增 scorer 适配器参数，不能直接作为 `gen_scorer` 的完整 checkpoint。新模式需训练出对应权重，不能仅在评测时切换模式。
+
+```bash
+# 检查命令，不启动训练。
+DRY_RUN=1 GEOMETRY_MODE=gen_scorer bash scripts/nav2_train_scene_geometry.sh
+
+# 训练完成后指定本次训练目录，避免评测脚本自动选到旧 gen 实验。
+TRAIN_RUN_DIR=/mnt/workspace/roa7sgh/DrivoR/exp/ke/drivor_sg_gen_scorer/<训练目录> \
+  bash scripts/nav2_eval_scene_geometry_all.sh
+```
+
+评测流程从训练配置读取 `gen_scorer` 并导出对应模型。手工导出时使用 `--mode gen_scorer --training-config <训练目录>/code/hydra/config.yaml`。评测严格加载新增适配器权重；推理只读取预测几何 tokens，不读取几何 GT。
 
 ## 标签与缓存
 
@@ -87,9 +108,12 @@ DRY_RUN=1 GEOMETRY_MODE=gen bash scripts/nav2_train_scene_geometry.sh
 GEOMETRY_MODE=off bash scripts/nav2_train_scene_geometry.sh
 GEOMETRY_MODE=aux bash scripts/nav2_train_scene_geometry.sh
 GEOMETRY_MODE=gen bash scripts/nav2_train_scene_geometry.sh
+
+# 几何 tokens 同时输入生成器和 scorer；独立实验目录 drivor_sg_gen_scorer。
+GEOMETRY_MODE=gen_scorer bash scripts/nav2_train_scene_geometry.sh
 ```
 
-启动脚本沿用 B0 的随机种子 2、10 个 epoch、4 张 GPU × 每卡 batch 16、基础学习率 0.0002 及初始化方式。可显式设置 `GEOMETRY_CACHE_MODE=on_the_fly` 进行小规模试验，额外 Hydra 参数也会转发。各组共有配置应保持一致，AUX 和 GEN 的几何分支维度也应相同。比较结果前应约定一致的 epoch／checkpoint 选择规则；现有按 top1 分数选最优 checkpoint 的回调，不能替代相同条件下的 oracle 覆盖率比较。
+启动脚本沿用 B0 的随机种子 2、10 个 epoch、4 张 GPU × 每卡 batch 16、基础学习率 0.0002 及初始化方式。可显式设置 `GEOMETRY_CACHE_MODE=on_the_fly` 进行小规模试验，额外 Hydra 参数也会转发。各组共有配置应保持一致，AUX、GEN 和 GEN-SCORER 的几何分支维度也应相同。比较结果前应约定一致的 epoch／checkpoint 选择规则；现有按 top1 分数选最优 checkpoint 的回调，不能替代相同条件下的 oracle 覆盖率比较。
 
 请从远程终端启动完整训练。当前文件／命令桥接限制单个文件最多写入 16 MiB，无法保存完整训练 checkpoint。冒烟测试的临时权重采用小型张量分片以满足此限制；正式 checkpoint 的加载方式保持不变。
 

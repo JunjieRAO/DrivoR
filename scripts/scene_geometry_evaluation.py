@@ -138,7 +138,7 @@ def main():
         checkpoint, training_config = select_checkpoint(repo)
         from export_scene_geometry import load_training_agent_config
         mode = load_training_agent_config(training_config).scene_geometry.mode
-        if mode not in ("off", "aux", "gen"):
+        if mode not in ("off", "aux", "gen", "gen_scorer"):
             raise ValueError(f"不支持的训练 mode: {mode}")
         experiment = f"drivor_sg_{mode}_top1_two_stage"
         stamp = datetime.now().strftime("%Y.%m.%d.%H.%M.%S.%f")

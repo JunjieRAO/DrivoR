@@ -13,7 +13,7 @@ export PYTHON_BIN="$PY"
 export PATH="$(dirname -- "$PY"):$PATH"
 GEOMETRY_CACHE_ROOT="${GEOMETRY_CACHE_ROOT:-$REPO_ROOT/dataset/scene_geometry_v1}"
 MODE="${GEOMETRY_MODE:-gen}"
-case "$MODE" in off|aux|gen) ;; *) echo 'GEOMETRY_MODE must be off, aux or gen' >&2; exit 1 ;; esac
+case "$MODE" in off|aux|gen|gen_scorer) ;; *) echo 'GEOMETRY_MODE must be off, aux, gen or gen_scorer' >&2; exit 1 ;; esac
 export EXPERIMENT_NAME="${EXPERIMENT_NAME:-drivor_sg_${MODE}}"
 export DAC_WEIGHT=0.0 COLLISION_WEIGHT=0.0
 printf '[INFO] Python: %s\n[INFO] Geometry cache: %s\n' "$PY" "$GEOMETRY_CACHE_ROOT"

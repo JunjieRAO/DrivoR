@@ -4,7 +4,7 @@ defaults:
 
 config:
   scene_geometry:
-    mode: gen
+    mode: gen  # off / aux / gen / gen_scorer (geometry to generator and scorer)
     num_agent_queries: 128
     num_map_queries: 100
     map_points: 20

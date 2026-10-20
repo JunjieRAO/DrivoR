@@ -124,10 +124,16 @@ def test_model_off_aux_gen_compatibility_and_scorer(monkeypatch):
     monkeypatch.setattr(module, "ImgEncoder", TinyBackbone)
     cfg = config()
     models = []
-    for mode in ("off", "aux", "gen"):
+    rng_states = []
+    for mode in ("off", "aux", "gen", "gen_scorer"):
         cfg.scene_geometry.mode = mode
         torch.manual_seed(2)
         models.append(module.DrivoRModel(OmegaConf.create(OmegaConf.to_container(cfg))).eval())
+        rng_states.append(torch.get_rng_state())
+    assert all(torch.equal(rng_states[0], state) for state in rng_states)
+    # Adding scorer adapters must preserve initialization of the existing GEN branch.
+    assert all(torch.equal(value, models[3].state_dict()[key])
+               for key, value in models[2].state_dict().items())
     baseline = models[0].state_dict()
     for model in models[1:]:
         state = model.state_dict()
@@ -144,14 +150,53 @@ def test_model_off_aux_gen_compatibility_and_scorer(monkeypatch):
         models[2].load_state_dict(baseline, strict=True)
     models[2].load_state_dict(models[2].state_dict(), strict=True)
     assert not any("geometry" in key for key in models[2].scorer_attention.state_dict())
+    models[3].load_state_dict(models[3].state_dict(), strict=True)
+    with pytest.raises(RuntimeError):
+        models[3].load_state_dict(models[2].state_dict(), strict=True)
+    for generator_layer, scorer_layer in zip(models[3].trajectory_decoder.layers,
+                                             models[3].scorer_attention.layers):
+        assert generator_layer.geometry_adapter is not scorer_layer.geometry_adapter
 
 
-def test_agent_optimizer_ramp_and_cacheonly(tmp_path, monkeypatch):
+def test_scorer_geometry_changes_scores_not_proposals_and_backpropagates(monkeypatch):
+    import navsim.agents.drivoR.drivor_model as module
+    monkeypatch.setattr(module, "ImgEncoder", TinyBackbone)
+    cfg = config()
+    cfg.scene_geometry.mode = "gen_scorer"
+    torch.manual_seed(2)
+    model = module.DrivoRModel(cfg).eval()
+    features = {"image": torch.randn(2, 3), "ego_status": torch.randn(2, 4, 11)}
+    with torch.no_grad():
+        before = model(features)
+        for layer in model.scorer_attention.layers:
+            layer.geometry_adapter.agent.gate.fill_(.2)
+            layer.geometry_adapter.map.gate.fill_(.2)
+    after = model(features)
+    assert torch.equal(before["proposals"], after["proposals"])
+    assert not torch.allclose(before["pdm_score"], after["pdm_score"])
+    for prediction in after["scene_geometry"].values():
+        for key in ("tokens", "geometry", "logits"):
+            prediction[-1][key].retain_grad()
+    sum(value.square().mean() for value in after["pred_logit"].values()).backward()
+    for prediction in after["scene_geometry"].values():
+        assert prediction[-1]["tokens"].grad.abs().sum() > 0
+        assert prediction[-1]["geometry"].grad is None
+        assert prediction[-1]["logits"].grad is None
+    assert all(p.grad is None for p in model.traj_head.parameters())
+    assert all(p.grad is None for p in model.trajectory_decoder.parameters())
+    for layer in model.scorer_attention.layers:
+        assert all(p.grad is not None and torch.isfinite(p.grad).all()
+                   for p in layer.geometry_adapter.parameters())
+
+
+@pytest.mark.parametrize("mode", ["gen", "gen_scorer"])
+def test_agent_optimizer_ramp_and_cacheonly(tmp_path, monkeypatch, mode):
     import navsim.agents.drivoR.drivor_model as module
     from navsim.agents.drivoR.drivor_agent import DrivoRAgent
     from navsim.planning.training.dataset import CacheOnlyDataset
     monkeypatch.setattr(module, "ImgEncoder", TinyBackbone)
     cfg = config()
+    cfg.scene_geometry.mode = mode
     agent = DrivoRAgent(cfg, {"name": "AdamW", "base_lr": .0002, "base_batch_size": 64},
                        use_ray=False)
     optimizer = agent.get_optimizers()[0]

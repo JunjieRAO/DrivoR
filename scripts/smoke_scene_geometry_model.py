@@ -13,12 +13,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--labels", required=True)
+    parser.add_argument("--mode", choices=("gen", "gen_scorer"), default="gen")
     args = parser.parse_args()
     out = Path(args.output); out.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[1]
     base = OmegaConf.load(root / "navsim/planning/script/config/common/agent/drivoR.yaml")
     extra = OmegaConf.load(root / "navsim/planning/script/config/common/agent/drivoR_scene_geometry.yaml")
     cfg = OmegaConf.merge(base.config, extra.config)
+    cfg.scene_geometry.mode = args.mode
     cfg.image_size = [224, 112]  # bounded integration check, not a training recipe
     cfg.image_backbone.model_weights = str(root / "weights/vit_small_patch14_reg4_dinov2.lvd142m/model.safetensors")
     cfg.scene_geometry.cache_root = str(Path(args.labels) / "cache")

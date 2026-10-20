@@ -109,8 +109,12 @@ class DrivoRModel(nn.Module):
             with torch.random.fork_rng(devices=[]):
                 self.scene_geometry = SceneGeometryEncoder(
                     config, (self.num_cams + self.num_lidar) * config.num_scene_tokens)
-                if self.geometry_mode == "gen":
+                if self.geometry_mode in ("gen", "gen_scorer"):
                     for layer in self.trajectory_decoder.layers:
+                        layer.geometry_adapter = GeometryAdapter(config)
+                if self.geometry_mode == "gen_scorer":
+                    # Separate adapters: scoring queries encode each candidate trajectory.
+                    for layer in self.scorer_attention.layers:
                         layer.geometry_adapter = GeometryAdapter(config)
 
 
@@ -169,7 +173,7 @@ class DrivoRModel(nn.Module):
         # decode the trajectories at each step of the decoder
         geometry = self.scene_geometry(scene_features) if self.geometry_mode != "off" else None
         token_list = self.trajectory_decoder(traj_tokens, scene_features,
-                                             geometry if self.geometry_mode == "gen" else None)
+                                             geometry if self.geometry_mode in ("gen", "gen_scorer") else None)
         log.debug(f"Trajectory decoder - {len(token_list)}")
         for i in range(self._config.ref_num):
             tokens = token_list[i]
@@ -190,7 +194,9 @@ class DrivoRModel(nn.Module):
         B,N,_,_=proposals.shape
 
         embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
-        tr_out = self.scorer_attention(embedded_traj, scene_features)  # (B, N, d_model)
+        tr_out = self.scorer_attention(
+            embedded_traj, scene_features,
+            geometry if self.geometry_mode == "gen_scorer" else None)  # (B, N, d_model)
         tr_out = tr_out+ego_token
         pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
 

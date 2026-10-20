@@ -6,7 +6,7 @@ from torch import nn
 
 def geometry_mode(config):
     mode = config.get("scene_geometry", {}).get("mode", "off")
-    if mode not in ("off", "aux", "gen"):
+    if mode not in ("off", "aux", "gen", "gen_scorer"):
         raise ValueError(f"Unknown scene_geometry.mode: {mode}")
     return mode
 
