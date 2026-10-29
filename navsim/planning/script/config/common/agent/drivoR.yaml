@@ -25,6 +25,26 @@ config:
   comfort: 2.0
   lk: 2.0
 
+  structured_input:
+    enabled: false
+    fusion: both
+    use_agents: true
+    use_map: true
+    use_traffic_lights: true
+    max_agents: 128
+    max_map_lines: 256
+    map_points: 20
+    max_lights: 16
+    max_segment_length: 20.0
+    roi: [-32.0, -32.0, 64.0, 32.0]
+    agent_selection: balanced
+    agent_risk_horizon: 5.0
+    agent_risk_distance: 2.0
+    map_selection: balanced
+    map_type_quotas: [12, 8, 8, 8, 6, 6, 6, 4, 3, 3]
+    map_segments_per_source: 2
+    light_selection: relevant
+
   tf_d_model: 256 # general feature size of the model
   tf_d_ffn: 1024 # hidden size of the heads
 

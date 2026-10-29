@@ -12,7 +12,7 @@ from navsim.agents.abstract_agent import AbstractAgent
 from navsim.planning.training.dataset import load_feature_target_from_pickle
 from pytorch_lightning.callbacks import ModelCheckpoint, ProgressBar, LearningRateMonitor
 from navsim.common.dataloader import MetricCacheLoader
-from navsim.common.dataclasses import SensorConfig
+from navsim.common.dataclasses import SensorConfig, Scene, Trajectory
 from .drivor_features import DrivoRTargetBuilder
 from .drivor_features import DrivoRFeatureBuilder
 import sys
@@ -77,7 +77,7 @@ class DrivoRAgent(AbstractAgent):
                 use_ray: bool = True,
                 checkpoint_perception_only: bool = False,
     ):
-        super().__init__()
+        super().__init__(requires_scene=config.get("structured_input", {}).get("enabled", False))
         self._config = config
         self._lr_args = lr_args
         self._checkpoint_path = checkpoint_path
@@ -196,10 +196,31 @@ class DrivoRAgent(AbstractAgent):
         return builders
 
     def get_feature_builders(self) :
-        return [DrivoRFeatureBuilder(config=self._config)]
+        builders = [DrivoRFeatureBuilder(config=self._config)]
+        if self.requires_scene:
+            from .structured_input.features import StructuredSceneFeatureBuilder
+            builders.append(StructuredSceneFeatureBuilder(self._config))
+        return builders
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         return self._drivor_model(features)
+
+    def compute_trajectory(self, agent_input):
+        if not self.requires_scene:
+            return super().compute_trajectory(agent_input)
+        if not isinstance(agent_input, Scene):
+            raise ValueError("Structured GT inference requires Scene, not sensor-only AgentInput")
+        self.eval()
+        features = {}
+        sensor_input = agent_input.get_agent_input()
+        for builder in self.get_feature_builders():
+            features.update(builder.compute_features(agent_input if getattr(builder, "requires_scene", False)
+                                                     else sensor_input))
+        device = next(self.parameters()).device
+        features = {key: value.unsqueeze(0).to(device) for key, value in features.items()}
+        with torch.inference_mode():
+            poses = self.forward(features)["trajectory"].squeeze(0).cpu().numpy()
+        return Trajectory(poses)
 
     def compute_score(self, targets, proposals, test=True):
         self._initialize_score_backend()

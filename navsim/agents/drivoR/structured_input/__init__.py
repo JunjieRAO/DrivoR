@@ -1,0 +1,1 @@
+"""Current-frame structured scene conditioning."""

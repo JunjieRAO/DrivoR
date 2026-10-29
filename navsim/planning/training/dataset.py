@@ -210,7 +210,7 @@ class Dataset(torch.utils.data.Dataset):
 
         for builder in self._feature_builders:
             data_dict_path = token_path / (builder.get_unique_name() + ".gz")
-            data_dict = builder.compute_features(agent_input)
+            data_dict = builder.compute_features(scene if getattr(builder, "requires_scene", False) else agent_input)
             dump_feature_target_to_pickle(data_dict_path, data_dict)
 
         for builder in self._target_builders:
@@ -302,7 +302,7 @@ class Dataset(torch.utils.data.Dataset):
             scene = self._scene_loader.get_scene_from_token(self._scene_loader.tokens[idx])
             agent_input = self._scene_loader.get_agent_input_from_token(self._scene_loader.tokens[idx])
             for builder in self._feature_builders:
-                features.update(builder.compute_features(agent_input))
+                features.update(builder.compute_features(scene if getattr(builder, "requires_scene", False) else agent_input))
             for builder in self._target_builders:
                 targets.update(builder.compute_targets(scene))
 

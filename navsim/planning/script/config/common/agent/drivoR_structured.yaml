@@ -1,0 +1,7 @@
+defaults:
+  - drivoR
+  - _self_
+
+config:
+  structured_input:
+    enabled: true

@@ -41,6 +41,10 @@ NAVSIM-v2 lane keeping (LK) is computed online and supervised by a seventh score
 head. Existing training metric caches can be reused. See
 [Lane keeping](docs/lane_keeping.md) for ranking defaults and legacy checkpoints.
 
+For the optional current-frame GT actor/map/traffic-light input ablation with
+128/256/16 MLP-based entity tokens in both generator and scorer, see
+[Structured input](docs/structured_input.md) and `bash scripts/nav2_train_structured.sh`.
+
 ```bash
 cd drivoR
 conda activate drivoR

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from .score_module.scorer import Scorer
 from .scene_geometry.geometry_encoder import geometry_mode, SceneGeometryEncoder, GeometryAdapter
+from .structured_input.encoder import StructuredSceneEncoder
 from .transformer_decoder import TransformerDecoder, TransformerDecoderScorer
 from .layers.image_encoder.dinov2_lora import ImgEncoder
 from .layers.utils.mlp import MLP
@@ -117,6 +118,14 @@ class DrivoRModel(nn.Module):
                     for layer in self.scorer_attention.layers:
                         layer.geometry_adapter = GeometryAdapter(config)
 
+        self.structured_enabled = config.get("structured_input", {}).get("enabled", False)
+        if self.structured_enabled:
+            self.structured_fusion = config.structured_input.get("fusion", "both")
+            if self.structured_fusion not in ("gen", "scorer", "both"):
+                raise ValueError("structured_input.fusion must be gen, scorer, or both")
+            with torch.random.fork_rng(devices=[]):
+                self.structured_encoder = StructuredSceneEncoder(config)
+
 
 
     def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -172,8 +181,22 @@ class DrivoRModel(nn.Module):
 
         # decode the trajectories at each step of the decoder
         geometry = self.scene_geometry(scene_features) if self.geometry_mode != "off" else None
-        token_list = self.trajectory_decoder(traj_tokens, scene_features,
-                                             geometry if self.geometry_mode in ("gen", "gen_scorer") else None)
+        generator_memory = scorer_memory = scene_features
+        generator_padding_mask = scorer_padding_mask = None
+        if self.structured_enabled:
+            structured_tokens, structured_valid = self.structured_encoder(features)
+            combined_memory = torch.cat([scene_features, structured_tokens.to(scene_features.dtype)], dim=1)
+            visual_padding = torch.zeros(scene_features.shape[:2], dtype=torch.bool, device=scene_features.device)
+            combined_padding = torch.cat([visual_padding, ~structured_valid], dim=1)
+            if self.structured_fusion in ("gen", "both"):
+                generator_memory = combined_memory
+                generator_padding_mask = combined_padding
+            if self.structured_fusion in ("scorer", "both"):
+                scorer_memory = combined_memory
+                scorer_padding_mask = combined_padding
+        token_list = self.trajectory_decoder(traj_tokens, generator_memory,
+                                             geometry if self.geometry_mode in ("gen", "gen_scorer") else None,
+                                             memory_padding_mask=generator_padding_mask)
         log.debug(f"Trajectory decoder - {len(token_list)}")
         for i in range(self._config.ref_num):
             tokens = token_list[i]
@@ -195,8 +218,9 @@ class DrivoRModel(nn.Module):
 
         embedded_traj = self.pos_embed(proposals.reshape(B, N, -1).detach())  # (B, N, d_model)
         tr_out = self.scorer_attention(
-            embedded_traj, scene_features,
-            geometry if self.geometry_mode == "gen_scorer" else None)  # (B, N, d_model)
+            embedded_traj, scorer_memory,
+            geometry if self.geometry_mode == "gen_scorer" else None,
+            memory_padding_mask=scorer_padding_mask)  # (B, N, d_model)
         tr_out = tr_out+ego_token
         pred_logit,pred_logit2, pred_agents_states, pred_area_logit ,bev_semantic_map,agent_states,agent_labels= self.scorer(proposals, tr_out)
 

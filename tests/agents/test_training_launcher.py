@@ -100,6 +100,34 @@ class TrainingLauncherTest(unittest.TestCase):
                 self.assertIn(f"{key}={value}", command)
         self.assertFalse(any("persistent_workers=" in argument for argument in command))
 
+    def test_structured_launcher_and_baseline_ablation(self):
+        script = self.repo / "scripts/nav2_train_structured.sh"
+        for enabled, fusion in (("true", "both"), ("true", "scorer"), ("false", "both")):
+            with self.subTest(enabled=enabled, fusion=fusion):
+                result = subprocess.run(
+                    ["bash", str(script)],
+                    env={**self.env, "PY": sys.executable,
+                         "STRUCTURED_ENABLED": enabled, "STRUCTURED_FUSION": fusion},
+                    check=True, capture_output=True, text=True,
+                )
+                command = shlex.split(result.stdout.splitlines()[-1])
+                self.assertIn("agent=drivoR_structured", command)
+                self.assertIn(f"agent.config.structured_input.enabled={enabled}", command)
+                self.assertIn(f"agent.config.structured_input.fusion={fusion}", command)
+                self.assertIn("seed=2", command)
+                self.assertFalse((self.directory / "exp").exists())
+
+    def test_structured_hydra_query_resolves_without_starting_training(self):
+        result = subprocess.run(
+            ["bash", str(self.repo / "scripts/nav2_train_structured.sh"), "--cfg", "job"],
+            env={**self.env, "PY": sys.executable, "DRY_RUN": "0"},
+            check=True, capture_output=True, text=True,
+        )
+        self.assertIn("structured_input:", result.stdout)
+        self.assertIn("enabled: true", result.stdout)
+        self.assertIn("fusion: both", result.stdout)
+        self.assertNotIn("Submitted PID", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
